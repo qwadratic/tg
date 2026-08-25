@@ -134,6 +134,7 @@ test('eval-30 the unattended paths cannot reach the send module', () => {
     'cli/commands/export-historical.ts',
     'cli/commands/folders.ts',
     'cli/commands/ship.ts',
+    'cli/commands/sync.ts',
     'sync/index.ts',
     'ship/index.ts'
   ]

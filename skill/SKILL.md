@@ -111,8 +111,12 @@ tg watch --minutes 30                 # wait for something about to be sent
 ```sh
 tg setup                    # pick which Telegram folders to track
 tg export chats             # incremental; safe to re-run
+tg sync --once --json       # one pass, one JSON summary line
 tg folders list --json
 ```
+Use `--once`. Plain `tg sync` loops on an interval until Ctrl+C and will hang
+the process that called it.
+
 
 **"Make my Telegram searchable."**
 ```sh

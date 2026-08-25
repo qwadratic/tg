@@ -166,6 +166,9 @@ file each, incrementally, shaped for a knowledge base.
 
 - `export chats [--private-only] [--chats <ids>]` — export tracked folders, or
   just the listed chat ids
+- `sync [--once] [--interval <seconds>] [--private-only] [--chats <ids>]` — run
+  `export chats` again and again on an interval until you stop it, so an archive
+  stays current without a cron entry. It polls; there is no push stream.
 - `export recent --cutoff <value>` — combined recent export (cutoff required, inclusive)
 - `export historical [--cutoff <value>]` — combined historical export (cutoff optional, exclusive)
 - `folders list [--json]` — folders already synced, most recently updated first
@@ -179,6 +182,11 @@ file each, incrementally, shaped for a knowledge base.
   a chat in an untracked folder, or a folder missing from `TG_BRAIN_MAP`, is
   refused. `--skip-unroutable` ships what it can and reports the rest, so one
   unroutable chat does not block the whole archive.
+
+```sh
+tg sync                  # every 5 minutes until Ctrl+C
+tg sync --once --json    # one pass, one JSON summary line
+```
 
 Recency exports are incremental and rely on `data/archive/sync-state.json` for
 per-chat watermarks. Cutoffs are interpreted in your local timezone at the start

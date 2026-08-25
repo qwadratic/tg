@@ -84,28 +84,30 @@ function updateStateForChat(
   updateChatState(state, chatId, newestMsgId, chatName)
 }
 
+// stdout belongs to `--json`: one summary line per pass and nothing else. Every
+// progress line here goes to stderr so `tg sync --once --json | jq` parses.
 function printSyncSummary(skippedChats: string[], newChatLabels: string[]) {
   if (skippedChats.length > 0) {
     const preview = skippedChats.slice(0, 3)
     const remaining = skippedChats.length - preview.length
-    console.log('Skipped chats:')
+    console.error('Skipped chats:')
     for (const chatLabel of preview) {
-      console.log(chatLabel)
+      console.error(chatLabel)
     }
     if (remaining > 0) {
-      console.log(`... and ${remaining} more\n`)
+      console.error(`... and ${remaining} more\n`)
     }
   }
 
   if (newChatLabels.length > 0) {
     const preview = newChatLabels.slice(0, 3)
     const remaining = newChatLabels.length - preview.length
-    console.log('New chats added:')
+    console.error('New chats added:')
     for (const chatLabel of preview) {
-      console.log(chatLabel)
+      console.error(chatLabel)
     }
     if (remaining > 0) {
-      console.log(`... and ${remaining} more`)
+      console.error(`... and ${remaining} more`)
     }
   }
 }
@@ -147,7 +149,7 @@ export async function syncChats(
   const newFoldersAdded = 0
 
   // Step 4: Sync each chat
-  const s = spinner()
+  const s = spinner({ output: process.stderr })
   s.start('Starting sync...')
 
   let messagesAppended = 0

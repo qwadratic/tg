@@ -13,6 +13,7 @@ import { registerExportSyncCommand } from './cli/commands/export-sync.js'
 import { registerExportRecentCommand } from './cli/commands/export-recent.js'
 import { registerExportHistoricalCommand } from './cli/commands/export-historical.js'
 import { registerCheckPhonesCommand } from './cli/commands/check-phones.js'
+import { registerSyncCommand } from './cli/commands/sync.js'
 import { registerShipCommand } from './cli/commands/ship.js'
 import { registerPeersCommand } from './cli/commands/peers.js'
 import { registerDumpCommand } from './cli/commands/dump.js'
@@ -54,6 +55,9 @@ const exportCommand = program
 registerExportSyncCommand(exportCommand)
 registerExportRecentCommand(exportCommand)
 registerExportHistoricalCommand(exportCommand)
+
+// A sibling of export, not a subcommand: it is meant to be typed on its own.
+registerSyncCommand(program)
 
 registerCheckPhonesCommand(program)
 registerShipCommand(program)

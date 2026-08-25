@@ -212,7 +212,8 @@ export async function refreshTrackedChats(
       }))
     )
     for (const chat of addedWithNames) {
-      console.log(`New chat: ${chat.name} (${chat.id})`)
+      // stderr: this runs inside `tg sync --json`, whose stdout must stay NDJSON.
+      console.error(`New chat: ${chat.name} (${chat.id})`)
     }
   }
 
@@ -224,7 +225,7 @@ export async function refreshTrackedChats(
       }))
     )
     for (const chat of removedWithNames) {
-      console.log(`Removed chat: ${chat.name} (${chat.id})`)
+      console.error(`Removed chat: ${chat.name} (${chat.id})`)
     }
   }
 

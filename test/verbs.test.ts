@@ -382,3 +382,38 @@ test('eval-96 the shipped agent skill stays in step with the CLI', () => {
     )
   }
 })
+
+test('eval-114 sync loops once per --once, floors the interval, and holds one session', () => {
+  // `tg sync` is the only verb that keeps the workspace lock indefinitely, so
+  // its three behavioural claims are pinned statically: one pass under --once,
+  // a 30s floor on --interval, and a single session for the whole run.
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/cli/commands/sync.ts', import.meta.url)),
+    'utf-8'
+  )
+
+  // One session: exactly one CALL to withAuthenticatedClient, with the loop inside it.
+  const opens = [...source.matchAll(/withAuthenticatedClient\(/g)]
+  assert.equal(opens.length, 1, 'sync must open exactly one session for the whole run')
+  const loop = source.indexOf('while (true)')
+  assert.ok(loop > opens[0].index!, 'the polling loop must live inside the session')
+
+  // --once exits after exactly one pass: the break precedes the sleep.
+  const breaksOnce = source.indexOf('if (opts.once) break')
+  const sleeps = source.indexOf('await sleep(')
+  assert.ok(breaksOnce !== -1 && sleeps > breaksOnce, '--once must break before sleeping')
+
+  // The floor, and its exit code: a bad flag is usage, not notConfigured.
+  assert.match(source, /interval < 30/)
+  assert.match(source, /EXIT\.usage/)
+
+  // Arguments are parsed before the lock is taken (eval-61's rule, for --chats).
+  const parsesChats = source.indexOf('opts.chats\n')
+  assert.ok(parsesChats !== -1 && parsesChats < opens[0].index!, '--chats must be parsed before connecting')
+
+  // stdout is NDJSON only: no console.log anywhere on the sync path.
+  for (const file of ['cli/commands/sync.ts', 'sync/index.ts']) {
+    const text = readFileSync(fileURLToPath(new URL(`../src/${file}`, import.meta.url)), 'utf-8')
+    assert.ok(!/console\.log\(/.test(text), `${file} writes to stdout; --json output must stay parseable`)
+  }
+})

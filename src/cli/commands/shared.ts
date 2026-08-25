@@ -77,7 +77,7 @@ export async function resolveExportConfig(tg: TelegramClient) {
       message: 'No folders selected. Run setup to choose folders for export?'
     })
     if (isCancel(shouldSelect) || !shouldSelect) {
-      logWarning('No folders selected. Export cancelled.')
+      logWarning('No folders selected. Export cancelled.', { stderr: true })
       return null
     }
     await syncFolderConfig(tg, true)
@@ -87,7 +87,9 @@ export async function resolveExportConfig(tg: TelegramClient) {
   const refreshed = await refreshTrackedChats(tg, config)
   const totalChats = refreshed.config.trackedChatIds.length
   if (totalChats === 0) {
-    logWarning('No chats found in selected folders. Run "tg setup --select" to update selection.')
+    logWarning('No chats found in selected folders. Run "tg setup --select" to update selection.', {
+      stderr: true
+    })
     return null
   }
 
