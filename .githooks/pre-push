@@ -1,0 +1,29 @@
+#!/bin/sh
+# Runs the same gates .github/workflows/ci.yml's `test` job runs, before the
+# push leaves this machine. A code-caused CI failure should be caught HERE,
+# not discovered later on a red commit nobody was watching.
+#
+# Does NOT run the `smoke` job (global npm install + a live CLI run in a temp
+# dir - too slow for every push, and it only catches packaging/install
+# mechanics, not logic). Does NOT catch an account-level failure like a GitHub
+# billing lock - nothing local can, that needs a human on github.com.
+#
+# Bypass (only for a confirmed false alarm, e.g. flaky network in typecheck):
+#   PRE_PUSH_SKIP=1 git push | git push --no-verify
+[ "$PRE_PUSH_SKIP" = "1" ] && exit 0
+
+ROOT=$(git rev-parse --show-toplevel)
+cd "$ROOT" || exit 1
+
+echo "pre-push: typecheck, test, build, package contents (same as CI's test job)"
+
+pnpm run typecheck \
+  && pnpm test \
+  && pnpm run build \
+  && node scripts/check-package-contents.mjs
+
+status=$?
+if [ "$status" != 0 ]; then
+  echo "✗ pre-push gate failed - this would have gone red on GitHub. Fix it, or bypass with PRE_PUSH_SKIP=1 git push (only for a confirmed false alarm)."
+fi
+exit $status
