@@ -61,9 +61,20 @@ export interface SendMediaOptions extends SendTextOptions {
   mime?: string
 }
 
-/** Photo when the extension says so, document otherwise. */
-export function mediaKindFor(path: string): 'photo' | 'document' {
-  return /\.(jpe?g|png|gif|webp)$/i.test(path) ? 'photo' : 'document'
+/**
+ * Photo or video when the extension says so, document otherwise.
+ *
+ * The distinction is not cosmetic: a document arrives as a file to download,
+ * while a video gets an inline player. Sending an .mp4 as a document was simply
+ * wrong - nobody wants to download a screen recording to watch it.
+ *
+ * .gif stays a photo: Telegram renders it animated already, and routing it
+ * through the video path would make it a silent looping clip instead.
+ */
+export function mediaKindFor(path: string): 'photo' | 'video' | 'document' {
+  if (/\.(jpe?g|png|gif|webp)$/i.test(path)) return 'photo'
+  if (/\.(mp4|mov|m4v|webm)$/i.test(path)) return 'video'
+  return 'document'
 }
 
 /** Send a file to a numeric peer id. */
@@ -87,10 +98,52 @@ export async function sendMedia(
       type: kind,
       file,
       fileName: basename(filePath),
+      // ponytail: no width/height/duration, so the client reads them from the
+      // file itself. Telegram still renders a player; the only cost is that the
+      // bubble may size itself once the header is parsed. Upgrade path if a
+      // thumbnail or exact aspect ratio ever matters: probe with ffprobe and
+      // pass width/height/duration/thumb - which would make ffmpeg a dependency
+      // of sending, so it is not worth it until something needs it.
+      ...(kind === 'video' ? { supportsStreaming: true } : {}),
       ...(options.mime ? { fileMime: options.mime } : {}),
       ...(options.caption ? { caption: options.caption } : {})
     } as never)
   )
+}
+
+/**
+ * Delete messages you sent, for everyone.
+ *
+ * The one write here that destroys rather than creates, so it is the one worth
+ * being most careful with: ids are per-chat, and a wrong peer silently deletes
+ * a DIFFERENT conversation's messages rather than erroring. Hence the numeric
+ * peer id requirement shared with every other write, and the same confirmation
+ * gate - `--yes` is the caller stating they mean it.
+ *
+ * Telegram reports no per-id result, so a stale or already-deleted id succeeds
+ * quietly. The log records what was asked for, not what existed.
+ */
+export async function deleteMessages(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  messageIds: number[],
+  options: SendTextOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  if (messageIds.length === 0) throw new OperatorError('Give at least one message id to delete.')
+  for (const id of messageIds) {
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new OperatorError(`Not a message id: ${id}. Ids are positive integers.`)
+    }
+  }
+
+  const peer = await tg.resolvePeer(peerId)
+  return guardedSend(peerId, 'delete', messageIds.length, async () => {
+    await tg.deleteMessagesById(peer, messageIds, { revoke: true })
+    return { id: messageIds[0] }
+  })
 }
 
 /**

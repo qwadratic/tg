@@ -2,7 +2,13 @@ import { confirm, isCancel } from '@clack/prompts'
 import chalk from 'chalk'
 import type { Command } from 'commander'
 import type { TelegramClient } from '@mtcute/node'
-import { sendMedia, sendNote, sendText, type SentRecord } from '../../send/index.js'
+import {
+  deleteMessages,
+  sendMedia,
+  sendNote,
+  sendText,
+  type SentRecord
+} from '../../send/index.js'
 import {
   assertConfirmed,
   MAX_SENDS_PER_DAY,
@@ -63,6 +69,10 @@ async function confirmRecipient(
 }
 
 function report(record: SentRecord): void {
+  if (record.kind === 'delete') {
+    logSummary(`deleted ${record.size} message(s) in ${record.peerId}`)
+    return
+  }
   logSummary(`sent ${record.kind} to ${record.peerId} as message ${record.messageId}`)
 }
 
@@ -110,6 +120,34 @@ export function registerSendCommand(program: Command): void {
               yes: options.yes
             })
           )
+        })
+      })
+    })
+
+  send
+    .command('rm <peer> <ids...>')
+    .description('Delete messages you sent, for everyone (id, @username or t.me link)')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, ids: string[], options) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+
+        const messageIds = ids.map((raw) => {
+          const id = Number(raw)
+          if (!Number.isInteger(id) || id <= 0) {
+            throw new OperatorError(`Not a message id: ${raw}. Ids are positive integers.`)
+          }
+          return id
+        })
+
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          // Deleting is irreversible and ids are per-chat, so name the chat.
+          const what = `${messageIds.length} message(s) (${messageIds.join(', ')}) from`
+          if (!(await confirmRecipient(target, what, Boolean(options.yes)))) return
+          report(await deleteMessages(tg, target.id, messageIds, { yes: options.yes }))
         })
       })
     })

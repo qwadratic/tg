@@ -14,6 +14,7 @@ import {
   type SentRecord
 } from '../src/send/gate.js'
 import { mediaFilename } from '../src/media/index.js'
+import { mediaKindFor } from '../src/send/index.js'
 import { withTempDir } from './helpers.js'
 
 const SRC = fileURLToPath(new URL('../src/', import.meta.url))
@@ -75,6 +76,9 @@ const WRITE_RPCS = [
   'sendMedia',
   'forwardMessages',
   'deleteMessages',
+  // The id-based sibling. `deleteMessages` takes Message objects, so the verb
+  // that actually deletes by number would have slipped the fence unnamed.
+  'deleteMessagesById',
   'editMessage',
   'readHistory'
 ] as const
@@ -406,10 +410,30 @@ test('eval-100 every write verb accepts --json', () => {
     'utf-8'
   )
 
-  const verbs = [...source.matchAll(/\.command\('((?:text|media|note)[^']*)'\)([\s\S]*?)\.action\(/g)]
-  assert.equal(verbs.length, 3, `expected 3 write verbs, found ${verbs.length}`)
+  const verbs = [...source.matchAll(/\.command\('((?:text|media|note|rm)[^']*)'\)([\s\S]*?)\.action\(/g)]
+  assert.equal(verbs.length, 4, `expected 4 write verbs, found ${verbs.length}`)
 
   for (const [, name, options] of verbs) {
     assert.match(options, /option\('--json'/, `tg send ${name} does not accept --json`)
   }
+})
+
+test('eval-113 an mp4 is sent as a playable video, a gif stays a photo', () => {
+  // A document arrives as a file to download; a video gets an inline player.
+  // Screen recordings were going out as documents, which is the wrong artefact
+  // for the one thing this workspace sends most.
+  assert.equal(mediaKindFor('/tmp/demo-a2a.mp4'), 'video')
+  assert.equal(mediaKindFor('CLIP.MOV'), 'video')
+  assert.equal(mediaKindFor('a.webm'), 'video')
+
+  // .gif is already animated in Telegram as a photo; routing it through the
+  // video path would turn it into a silent looping clip instead.
+  assert.equal(mediaKindFor('loop.gif'), 'photo')
+  assert.equal(mediaKindFor('shot.png'), 'photo')
+
+  // No extension, or one that means nothing here, must not become a video.
+  assert.equal(mediaKindFor('notes.md'), 'document')
+  assert.equal(mediaKindFor('archive'), 'document')
+  assert.equal(mediaKindFor('mp4'), 'document')
+  assert.equal(mediaKindFor('sneaky.mp4.zip'), 'document')
 })

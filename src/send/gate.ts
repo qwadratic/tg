@@ -30,10 +30,10 @@ export const MAX_SENDS_PER_DAY = Number(process.env.TG_MAX_SENDS_PER_DAY ?? 20)
 export interface SentRecord {
   at: string
   peerId: number
-  kind: 'text' | 'photo' | 'document'
-  /** Message id on success, null on failure. */
+  kind: 'text' | 'photo' | 'video' | 'document' | 'delete'
+  /** Message id on success, null on failure. For a delete, the first id removed. */
   messageId: number | null
-  /** Characters for text, bytes for media. The size, never the content. */
+  /** Characters for text, bytes for media, message count for a delete. */
   size: number
   ok: boolean
   error?: string
