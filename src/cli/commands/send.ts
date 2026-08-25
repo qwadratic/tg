@@ -4,6 +4,9 @@ import type { Command } from 'commander'
 import type { TelegramClient } from '@mtcute/node'
 import {
   deleteMessages,
+  editMessageText,
+  forwardMessage,
+  markRead,
   sendMedia,
   sendNote,
   sendText,
@@ -68,9 +71,18 @@ async function confirmRecipient(
   return true
 }
 
-function report(record: SentRecord): void {
+function report(record: SentRecord, json = false): void {
+  // --json writes only the payload to stdout; the human lines are the else.
+  if (json) {
+    process.stdout.write(`${JSON.stringify(record, null, 2)}\n`)
+    return
+  }
   if (record.kind === 'delete') {
     logSummary(`deleted ${record.size} message(s) in ${record.peerId}`)
+    return
+  }
+  if (record.kind === 'read') {
+    logSummary(`marked ${record.peerId} as read`)
     return
   }
   logSummary(`sent ${record.kind} to ${record.peerId} as message ${record.messageId}`)
@@ -94,7 +106,7 @@ export function registerSendCommand(program: Command): void {
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
           if (!(await confirmRecipient(target, 'a text message', Boolean(options.yes)))) return
-          report(await sendText(tg, target.id, text, { yes: options.yes }))
+          report(await sendText(tg, target.id, text, { yes: options.yes }), Boolean(options.json))
         })
       })
     })
@@ -118,7 +130,8 @@ export function registerSendCommand(program: Command): void {
               caption: options.caption,
               mime: options.mime,
               yes: options.yes
-            })
+            }),
+            Boolean(options.json)
           )
         })
       })
@@ -145,9 +158,99 @@ export function registerSendCommand(program: Command): void {
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
           // Deleting is irreversible and ids are per-chat, so name the chat.
-          const what = `${messageIds.length} message(s) (${messageIds.join(', ')}) from`
+          const what = `a delete of ${messageIds.length} message(s) (${messageIds.join(', ')})`
           if (!(await confirmRecipient(target, what, Boolean(options.yes)))) return
-          report(await deleteMessages(tg, target.id, messageIds, { yes: options.yes }))
+          report(
+            await deleteMessages(tg, target.id, messageIds, { yes: options.yes }),
+            Boolean(options.json)
+          )
+        })
+      })
+    })
+
+  send
+    .command('forward <peer> <ids...>')
+    .description('Forward messages you can see into another chat (id, @username or t.me link)')
+    .requiredOption('--to <target>', 'Destination chat (id, @username or t.me link)')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, ids: string[], options) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        parsePeerRef(options.to)
+        assertConfirmed(options)
+
+        const messageIds = ids.map((raw) => {
+          const id = Number(raw)
+          if (!Number.isInteger(id) || id <= 0) {
+            throw new OperatorError(`Not a message id: ${raw}. Ids are positive integers.`)
+          }
+          return id
+        })
+        // Telegram forwards at most 100 at once; refuse before the network.
+        if (messageIds.length > 100) {
+          throw new OperatorError(
+            `Too many messages to forward (${messageIds.length}). ` +
+            'Telegram allows at most 100 at once.'
+          )
+        }
+
+        await withAuthenticatedClient(async (tg) => {
+          const source = await resolvePeerRef(tg, peer)
+          const target = await resolvePeerRef(tg, options.to)
+          // The confirmation names the destination - that is who gains a copy.
+          const what =
+            `a forward of ${messageIds.length} message(s) (${messageIds.join(', ')}) ` +
+            `from ${describePeer(source)}`
+          if (!(await confirmRecipient(target, what, Boolean(options.yes)))) return
+          report(
+            await forwardMessage(tg, source.id, target.id, messageIds, { yes: options.yes }),
+            Boolean(options.json)
+          )
+        })
+      })
+    })
+
+  send
+    .command('edit <peer> <id> <text>')
+    .description('Edit the text of a message you sent (id, @username or t.me link)')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, id: string, text: string, options) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+
+        const messageId = Number(id)
+        if (!Number.isInteger(messageId) || messageId <= 0) {
+          throw new OperatorError(`Not a message id: ${id}. Ids are positive integers.`)
+        }
+
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          const what = `an edit to message ${messageId}`
+          if (!(await confirmRecipient(target, what, Boolean(options.yes)))) return
+          report(
+            await editMessageText(tg, target.id, messageId, text, { yes: options.yes }),
+            Boolean(options.json)
+          )
+        })
+      })
+    })
+
+  send
+    .command('read <peer>')
+    .description('Mark a chat as read, up to its latest message (id, @username or t.me link)')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, options) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          if (!(await confirmRecipient(target, 'a read receipt', Boolean(options.yes)))) return
+          report(await markRead(tg, target.id, { yes: options.yes }), Boolean(options.json))
         })
       })
     })
@@ -198,7 +301,7 @@ export function registerSendCommand(program: Command): void {
         assertConfirmed(options)
         await withAuthenticatedClient(async (tg) => {
           // No recipient confirmation: the only possible target is yourself.
-          report(await sendNote(tg, text, { yes: options.yes }))
+          report(await sendNote(tg, text, { yes: options.yes }), Boolean(options.json))
         })
       })
     })

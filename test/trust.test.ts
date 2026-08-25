@@ -79,6 +79,10 @@ const WRITE_RPCS = [
   // The id-based sibling. `deleteMessages` takes Message objects, so the verb
   // that actually deletes by number would have slipped the fence unnamed.
   'deleteMessagesById',
+  // Same shape on the forward side. `forwardMessages` takes Message objects, so
+  // the verb that actually forwards by number would have slipped the fence
+  // unnamed.
+  'forwardMessagesById',
   'editMessage',
   'readHistory'
 ] as const
@@ -214,7 +218,7 @@ test('eval-65 the send commands resolve a peer before calling the send module', 
     'send.ts must resolve a reference to an identity before sending'
   )
   assert.ok(
-    !/send(Text|Media)\(tg,\s*peer\b/.test(source),
+    !/(sendText|sendMedia|deleteMessages|forwardMessage|editMessageText|markRead)\(tg,\s*peer\b/.test(source),
     'send.ts must never pass the raw typed reference to a send function'
   )
   // Every send path shows the resolved identity, or takes --yes on the record.
@@ -359,7 +363,7 @@ test('eval-97 the send gate is cheap, and refuses before a session is opened', (
     .map((m) => m[1])
     .filter((body) => body.includes('withAuthenticatedClient'))
 
-  assert.ok(actions.length >= 3, `expected the write actions, found ${actions.length}`)
+  assert.ok(actions.length >= 6, `expected the write actions, found ${actions.length}`)
 
   for (const body of actions) {
     const gate = body.indexOf('assertConfirmed')
@@ -410,8 +414,8 @@ test('eval-100 every write verb accepts --json', () => {
     'utf-8'
   )
 
-  const verbs = [...source.matchAll(/\.command\('((?:text|media|note|rm)[^']*)'\)([\s\S]*?)\.action\(/g)]
-  assert.equal(verbs.length, 4, `expected 4 write verbs, found ${verbs.length}`)
+  const verbs = [...source.matchAll(/\.command\('((?:text|media|note|rm|forward|edit|read)[^']*)'\)([\s\S]*?)\.action\(/g)]
+  assert.equal(verbs.length, 7, `expected 7 write verbs, found ${verbs.length}`)
 
   for (const [, name, options] of verbs) {
     assert.match(options, /option\('--json'/, `tg send ${name} does not accept --json`)

@@ -125,6 +125,10 @@ gbrain query "who offered me a job"   # semantic, needs embeddings
 ```sh
 tg send text <peer> "message"
 tg send media <peer> ./file.pdf --caption "..."
+tg send rm <peer> <id>      # delete a message you sent, for everyone
+tg send forward <peer> <id> --to <target>
+tg send edit <peer> <id> "new text"
+tg send read <peer>         # mark a chat as read
 tg note "remember this"     # to your own Saved Messages
 tg send log                 # what this workspace has already sent
 ```

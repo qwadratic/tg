@@ -16,6 +16,12 @@ import { assertConfirmed, guardedSend, type SentRecord } from './gate.js'
  *    receives updates, and there are ZERO sendText/sendMedia/forwardMessages/
  *    deleteMessages/editMessage/readHistory call sites in src/."
  *
+ * The fenced verb set is: `tg send text`, `tg send media`, `tg send rm`,
+ * `tg send forward`, `tg send edit`, `tg send read`, `tg note` and the
+ * read-only `tg send log`. Widening it again means a decision file, per
+ * backlog/decisions/2026-08-17-narrow-the-no-write-back-rule-and-build-the-missing-gates.md
+ * and its 2026-08-19 amendment.
+ *
  * That invariant is now deliberately NARROWED, not abandoned. The operator sent
  * an APK, images, notes and outreach messages this month from four throwaway
  * scripts that held the same credential with none of the guards below, so the
@@ -143,6 +149,108 @@ export async function deleteMessages(
   return guardedSend(peerId, 'delete', messageIds.length, async () => {
     await tg.deleteMessagesById(peer, messageIds, { revoke: true })
     return { id: messageIds[0] }
+  })
+}
+
+/**
+ * Forward messages from one chat into another.
+ *
+ * Two peers, so two chances to aim it wrong: ids are per-chat, and a wrong
+ * source silently forwards a DIFFERENT conversation's messages. Both ends go
+ * through {@link assertPeerId} for that reason.
+ *
+ * The record is logged against the DESTINATION - the peer whose screen changes
+ * - with the SOURCE alongside it in `fromPeerId`, because the risk of this verb
+ * is the pair: a private thread copied out to a third party.
+ *
+ * A forward delivers one message per id, so it costs one cap unit per id. The
+ * caps bound delivered messages, not RPC calls; charging a hundred-message
+ * forward a single unit would empty the point of them.
+ */
+export async function forwardMessage(
+  tg: TelegramClient,
+  fromPeer: string | number,
+  toPeer: string | number,
+  messageIds: number[],
+  options: SendTextOptions = {}
+): Promise<SentRecord> {
+  const fromId = assertPeerId(fromPeer)
+  const toId = assertPeerId(toPeer)
+  assertConfirmed(options)
+
+  if (messageIds.length === 0) throw new OperatorError('Give at least one message id to forward.')
+  // Telegram's own ceiling (mtcute: "You can forward no more than 100 messages
+  // at once"). Caught here so an oversized list never reaches the network,
+  // where it would fail server-side after burning cap budget.
+  if (messageIds.length > 100) {
+    throw new OperatorError(
+      `Too many messages to forward (${messageIds.length}). Telegram allows at most 100 at once.`
+    )
+  }
+  for (const id of messageIds) {
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new OperatorError(`Not a message id: ${id}. Ids are positive integers.`)
+    }
+  }
+
+  const from = await tg.resolvePeer(fromId)
+  const to = await tg.resolvePeer(toId)
+  return guardedSend(toId, 'forward', messageIds.length, async () => {
+    const messages = await tg.forwardMessagesById({ fromChatId: from, toChatId: to, messages: messageIds })
+    return { id: messages[0]?.id ?? 0 }
+  }, { units: messageIds.length, fromPeerId: fromId })
+}
+
+/**
+ * Edit the text of a message you sent.
+ *
+ * An edit is a write on someone else's screen just as much as {@link sendText}
+ * is - the bubble changes under them, and Telegram shows it as edited - so it
+ * takes the same numeric peer id and the same confirmation gate.
+ */
+export async function editMessageText(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  messageId: number,
+  text: string,
+  options: SendTextOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    throw new OperatorError(`Not a message id: ${messageId}. Ids are positive integers.`)
+  }
+  if (!text.trim()) throw new OperatorError('Refusing to edit a message to be empty.')
+
+  const peer = await tg.resolvePeer(peerId)
+  return guardedSend(peerId, 'edit', text.length, async () => {
+    const message = await tg.editMessage({ chatId: peer, message: messageId, text })
+    return { id: message.id }
+  })
+}
+
+/**
+ * Mark a chat as read, up to its latest message.
+ *
+ * Sends no content, and is gated exactly like one that does. A read receipt is
+ * visible to the other party: it tells them a human is awake and reading right
+ * now. An unattended run quietly clearing unreads is therefore a real signal
+ * leak about the operator, not a free action, so it costs the same budget and
+ * needs the same yes as {@link sendText}.
+ */
+export async function markRead(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  options: SendTextOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  const peer = await tg.resolvePeer(peerId)
+  return guardedSend(peerId, 'read', 0, async () => {
+    await tg.readHistory(peer)
+    return { id: 0 }
   })
 }
 

@@ -30,11 +30,35 @@ export const MAX_SENDS_PER_DAY = Number(process.env.TG_MAX_SENDS_PER_DAY ?? 20)
 export interface SentRecord {
   at: string
   peerId: number
-  kind: 'text' | 'photo' | 'video' | 'document' | 'delete'
-  /** Message id on success, null on failure. For a delete, the first id removed. */
+  /**
+   * Source chat for a forward, absent for every other kind.
+   *
+   * A forward is the one write with two peers, and the risk it carries is
+   * exactly the pair: which chat was copied OUT of, into which. Logging only
+   * the destination would make `tg send log` unable to answer that.
+   */
+  fromPeerId?: number
+  kind: 'text' | 'photo' | 'video' | 'document' | 'delete' | 'forward' | 'edit' | 'read'
+  /**
+   * Message id on success, null on failure. For a delete, the first id removed;
+   * for a forward, the first message created in the destination chat; for an
+   * edit, the message edited; for a read, always 0 - there is no message id to
+   * report.
+   */
   messageId: number | null
-  /** Characters for text, bytes for media, message count for a delete. */
+  /**
+   * Characters for text, bytes for media, message count for a delete or a
+   * forward, characters for an edit, and always 0 for a read - it carries no
+   * content.
+   */
   size: number
+  /**
+   * How much of the send budget this attempt consumed. Absent means 1.
+   *
+   * A forward delivers one message per id, so it costs one unit per id: the
+   * caps exist to bound DELIVERED messages, not RPC calls.
+   */
+  units?: number
   ok: boolean
   error?: string
 }
@@ -84,7 +108,9 @@ export function readSendLog(path = SEND_LOG_PATH): SentRecord[] {
 /** Attempts in the last 24h, successful or not. */
 export function sendsToday(records: SentRecord[], now = Date.now()): number {
   const cutoff = now - 24 * 60 * 60 * 1000
-  return records.filter((r) => Date.parse(r.at) >= cutoff).length
+  return records
+    .filter((r) => Date.parse(r.at) >= cutoff)
+    .reduce((total, r) => total + (r.units ?? 1), 0)
 }
 
 /**
@@ -111,8 +137,8 @@ export function resetRunCounter(): void {
 }
 
 /** Throw unless both caps allow another send. */
-export function assertUnderCaps(): void {
-  if (sentThisRun >= MAX_SENDS_PER_RUN) {
+export function assertUnderCaps(units = 1): void {
+  if (sentThisRun + units > MAX_SENDS_PER_RUN) {
     throw new OperatorError(
       `Per-run send cap reached (${MAX_SENDS_PER_RUN}).\n` +
       '  Raise it deliberately with TG_MAX_SENDS_PER_RUN if this is intended.'
@@ -120,7 +146,7 @@ export function assertUnderCaps(): void {
   }
 
   const today = sendsToday(readSendLog())
-  if (today >= MAX_SENDS_PER_DAY) {
+  if (today + units > MAX_SENDS_PER_DAY) {
     throw new OperatorError(
       `Daily send cap reached (${today}/${MAX_SENDS_PER_DAY} in the last 24h).\n` +
       '  Telegram limits outbound messaging from user accounts, and a burst is\n' +
@@ -140,20 +166,29 @@ export async function guardedSend(
   peerId: number,
   kind: SentRecord['kind'],
   size: number,
-  rpc: () => Promise<{ id: number }>
+  rpc: () => Promise<{ id: number }>,
+  extra: { units?: number; fromPeerId?: number } = {}
 ): Promise<SentRecord> {
-  assertUnderCaps()
+  const units = extra.units ?? 1
+  assertUnderCaps(units)
 
-  const base = { at: new Date().toISOString(), peerId, kind, size }
+  const base = {
+    at: new Date().toISOString(),
+    peerId,
+    kind,
+    size,
+    ...(extra.fromPeerId === undefined ? {} : { fromPeerId: extra.fromPeerId }),
+    ...(units === 1 ? {} : { units })
+  }
 
   try {
     const message = await rpc()
-    sentThisRun++
+    sentThisRun += units
     const record: SentRecord = { ...base, messageId: message.id, ok: true }
     recordSend(record)
     return record
   } catch (error) {
-    sentThisRun++
+    sentThisRun += units
     const record: SentRecord = {
       ...base,
       messageId: null,

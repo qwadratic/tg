@@ -202,6 +202,10 @@ hard to fire by accident.
 | --- | --- |
 | `send text <peer> <text>` | send a message |
 | `send media <peer> <file> [--caption ...]` | send a file |
+| `send rm <peer> <ids...>` | delete messages you sent, for everyone |
+| `send forward <peer> <ids...> --to <target>` | forward messages into another chat |
+| `send edit <peer> <id> <text>` | edit the text of a message you sent |
+| `send read <peer>` | mark a chat as read |
 | `note <text>` | send to your own Saved Messages |
 | `send log [--json]` | what this workspace has sent |
 
