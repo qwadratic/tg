@@ -174,7 +174,8 @@ test('eval-56 an empty chat sorts last instead of crashing the comparator', asyn
   )
 
   assert.deepEqual(peers.map((p) => p.id), [2, 1])
-  assert.equal(peers[1].lastMessageAt, null)
+  // The deepEqual above pins the length at 2.
+  assert.equal(peers[1]!.lastMessageAt, null)
 })
 
 test('eval-57 an ASCII needle finds an accented name', () => {
@@ -396,7 +397,8 @@ test('eval-114 sync loops once per --once, floors the interval, and holds one se
   const opens = [...source.matchAll(/withAuthenticatedClient\(/g)]
   assert.equal(opens.length, 1, 'sync must open exactly one session for the whole run')
   const loop = source.indexOf('while (true)')
-  assert.ok(loop > opens[0].index, 'the polling loop must live inside the session')
+  // The assertion above pins opens.length at 1, so index 0 exists.
+  assert.ok(loop > opens[0]!.index, 'the polling loop must live inside the session')
 
   // --once exits after exactly one pass: the break precedes the sleep.
   const breaksOnce = source.indexOf('if (opts.once) break')
@@ -409,7 +411,7 @@ test('eval-114 sync loops once per --once, floors the interval, and holds one se
 
   // Arguments are parsed before the lock is taken (eval-61's rule, for --chats).
   const parsesChats = source.indexOf('opts.chats\n')
-  assert.ok(parsesChats !== -1 && parsesChats < opens[0].index, '--chats must be parsed before connecting')
+  assert.ok(parsesChats !== -1 && parsesChats < opens[0]!.index, '--chats must be parsed before connecting')
 
   // stdout is NDJSON only: no console.log anywhere on the sync path.
   for (const file of ['cli/commands/sync.ts', 'sync/index.ts']) {

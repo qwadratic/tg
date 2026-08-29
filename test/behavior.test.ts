@@ -112,7 +112,7 @@ test('sync updates state and appends to existing archive', async () => {
     const state = JSON.parse(readFileSync(join('data', 'archive', 'sync-state.json'), 'utf-8')) as {
       chats: Record<string, { lastMessageId: number }>
     }
-    assert.equal(state.chats['10'].lastMessageId, 2)
+    assert.equal(state.chats['10']?.lastMessageId, 2)
   })
 })
 

@@ -44,7 +44,7 @@ test('eval-101 the most recently used number is offered first, and repeats merge
       'the list is newest first'
     )
     assert.equal(records.length, 2, 'logging in twice with one number is one entry')
-    assert.equal(records[0].useCount, 2, 'the repeat is counted, not duplicated')
+    assert.equal(records[0]?.useCount, 2, 'the repeat is counted, not duplicated')
   })
 })
 
@@ -59,7 +59,7 @@ test('eval-102 formatting differences do not create a second entry', async () =>
 
     const records = readPhones(path)
     assert.equal(records.length, 1, `four spellings of one number produced ${records.length} entries`)
-    assert.equal(records[0].phone, '+15550001111', 'stored in E.164')
+    assert.equal(records[0]?.phone, '+15550001111', 'stored in E.164')
   })
 })
 
@@ -191,8 +191,8 @@ test('eval-108 the picker always offers a way to type a different number', () =>
   assert.equal(choices.length, records.length + 1)
   assert.deepEqual(choices.slice(0, 2).map((c) => c.value), records.map((r) => r.phone))
   assert.equal(choices.at(-1)?.value, ANOTHER_NUMBER, 'the escape hatch must be last')
-  assert.equal(choices[0].hint, 'last used 1h ago')
-  assert.equal(choices[1].hint, 'last used 3d ago')
+  assert.equal(choices[0]?.hint, 'last used 1h ago')
+  assert.equal(choices[1]?.hint, 'last used 3d ago')
 
   assert.equal(phoneChoices([], now).length, 1, 'with no history there is still a way through')
   assert.equal(normalisePhone(ANOTHER_NUMBER), null, 'the sentinel must not be a valid number')

@@ -110,11 +110,12 @@ test('folder statuses sort by last update, newest first, never-synced last', () 
   updateFolderState(state, 3, [30], 'Archive')
 
   updateChatState(state, 10, 500, 'Standup')
-  state.chats[10].lastSyncedAt = '2026-02-01T10:00:00.000Z'
+  // updateChatState just created each of these entries.
+  state.chats[10]!.lastSyncedAt = '2026-02-01T10:00:00.000Z'
   updateChatState(state, 11, 900, 'Design')
-  state.chats[11].lastSyncedAt = '2026-02-03T10:00:00.000Z'
+  state.chats[11]!.lastSyncedAt = '2026-02-03T10:00:00.000Z'
   updateChatState(state, 20, 42, 'Mum')
-  state.chats[20].lastSyncedAt = '2026-02-05T10:00:00.000Z'
+  state.chats[20]!.lastSyncedAt = '2026-02-05T10:00:00.000Z'
   // Folder 3's chat was never exported.
 
   const statuses = folderStatuses(state)
@@ -137,13 +138,13 @@ test('folder titles survive a state written before titles existed', () => {
   // Simulate an old on-disk state: membership but no title.
   state.folders[7] = { chatIds: [70], lastSyncedAt: '2026-01-01T00:00:00.000Z' }
 
-  assert.equal(folderStatuses(state)[0].title, 'folder 7')
+  assert.equal(folderStatuses(state)[0]?.title, 'folder 7')
 
   updateFolderState(state, 7, [70], 'Reading')
-  assert.equal(folderStatuses(state)[0].title, 'Reading')
+  assert.equal(folderStatuses(state)[0]?.title, 'Reading')
   // A later refresh that omits the title must not erase it.
   updateFolderState(state, 7, [70, 71])
-  assert.equal(folderStatuses(state)[0].title, 'Reading')
+  assert.equal(folderStatuses(state)[0]?.title, 'Reading')
 })
 
 test('relativeTime renders coarse buckets and handles never', () => {

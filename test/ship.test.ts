@@ -131,7 +131,7 @@ test('eval-44 an unroutable file fails loudly instead of defaulting to a brain',
     let plan = planShip({ archiveDir: 'archive', since: 0, brainMap: parseBrainMap('7=personal') })
     assert.deepEqual(plan.entries, [], 'nothing is routed')
     assert.equal(plan.skipped.length, 1)
-    assert.equal(plan.skipped[0].reason, 'no-folder')
+    assert.equal(plan.skipped[0]?.reason, 'no-folder')
     // The DEFAULT is still a loud failure: only an explicit flag proceeds.
     assert.throws(() => { throw unroutableError(plan.skipped) }, /in no tracked folder/)
     assert.throws(
@@ -142,7 +142,7 @@ test('eval-44 an unroutable file fails loudly instead of defaulting to a brain',
     // A chat whose folder is not in the map.
     writeFileSync(join('archive', 'orphan_9.md'), page('[99]'))
     plan = planShip({ archiveDir: 'archive', since: 0, brainMap: parseBrainMap('7=personal') })
-    assert.equal(plan.skipped[0].reason, 'unmapped-folder')
+    assert.equal(plan.skipped[0]?.reason, 'unmapped-folder')
     assert.throws(() => { throw unroutableError(plan.skipped) }, /TG_BRAIN_MAP/)
     // The message must name the fix, not just the problem.
     assert.match(unroutableError(plan.skipped).message, /99=<source>/)
@@ -162,7 +162,7 @@ test('eval-45 shipping twice is a no-op: same slug, same stdin, nothing re-sent'
     const first = ship(opts)
     assert.deepEqual(first, { shipped: 1, captures: 1, skipped: 0 })
     assert.equal(calls(dir).length, 1)
-    assert.deepEqual(calls(dir)[0].argv, [
+    assert.deepEqual(calls(dir)[0]?.argv, [
       'capture', '--stdin', '--slug', 'tg/chat/a_1', '--source', 'personal', '--quiet'
     ])
 
@@ -230,7 +230,8 @@ test('eval-47 --dry-run execs nothing and moves no watermark', async () => {
 const SECRET_NAMES = (() => {
   const psst = readFileSync(resolve(SRC, 'session/psst.ts'), 'utf-8')
   const block = psst.slice(psst.indexOf('export const SECRETS'), psst.indexOf('} as const'))
-  const names = [...block.matchAll(/'([A-Z][A-Z0-9_]+)'/g)].map((m) => m[1])
+  // Group 1 is not optional in the pattern: a match always carries it.
+  const names = [...block.matchAll(/'([A-Z][A-Z0-9_]+)'/g)].map((m) => m[1]!)
   if (names.length < 4) throw new Error(`could not read SECRETS from psst.ts, got ${names.length}`)
   return names
 })()
@@ -246,7 +247,8 @@ test('eval-48 the ship import graph contains no session, client or mtcute module
 
     const source = readFileSync(file, 'utf-8')
     for (const match of source.matchAll(/from\s+'([^']+)'/g)) {
-      const spec = match[1]
+      // Group 1 is not optional in the pattern: a match always carries it.
+      const spec = match[1]!
       if (!spec.startsWith('.')) {
         assert.ok(
           !spec.includes('mtcute'),

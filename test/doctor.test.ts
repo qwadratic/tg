@@ -117,7 +117,8 @@ test('eval-93 every documented exit code is actually emitted somewhere', () => {
   const emitted = new Set<string>()
   for (const f of files) {
     if (f.endsWith('exit-codes.ts')) continue
-    for (const m of readFileSync(f, 'utf-8').matchAll(/EXIT\.(\w+)/g)) emitted.add(m[1])
+    // Group 1 is not optional in the pattern: a match always carries it.
+    for (const m of readFileSync(f, 'utf-8').matchAll(/EXIT\.(\w+)/g)) emitted.add(m[1]!)
   }
   for (const name of Object.keys(EXIT)) {
     assert.ok(emitted.has(name), `EXIT.${name} is documented but emitted nowhere in src/`)

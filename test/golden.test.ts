@@ -109,7 +109,8 @@ test('eval-08 a chat in two folders renders both ids and is exported once', asyn
     assert.deepEqual(files, ['dual-member_10.md'], 'dual membership must not duplicate the export')
     assertGolden(
       'eval-08-dual-folder-frontmatter',
-      readFileSync(getArchivePath('Dual Member', 10), 'utf-8').split('---\n')[1]
+      // The file was just written with frontmatter, so segment 1 exists.
+      readFileSync(getArchivePath('Dual Member', 10), 'utf-8').split('---\n')[1]!
     )
   })
 })

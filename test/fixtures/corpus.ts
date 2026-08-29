@@ -46,8 +46,11 @@ export const CONVERSATION: Message[] = [
   })
 ]
 
-/** Deliberately out of order: the writer must sort chronologically. */
-export const UNSORTED: Message[] = [CONVERSATION[2], CONVERSATION[0], CONVERSATION[1]]
+/**
+ * Deliberately out of order: the writer must sort chronologically.
+ * CONVERSATION is a three-element literal above, so 0..2 are present.
+ */
+export const UNSORTED: Message[] = [CONVERSATION[2]!, CONVERSATION[0]!, CONVERSATION[1]!]
 
 /** Names that have historically broken filenames. */
 export const AWKWARD_NAMES: [name: string, chatId: number][] = [
