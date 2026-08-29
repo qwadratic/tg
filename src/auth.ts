@@ -1,6 +1,7 @@
 import { TelegramClient, tl, User, SentCode } from '@mtcute/node'
 import { text, password, select, isCancel, intro, outro, spinner } from '@clack/prompts'
 import chalk from 'chalk'
+import qrcodeTerminal from 'qrcode-terminal'
 import { withFloodWaitHandling } from './utils/flood-wait.js'
 import { ANOTHER_NUMBER, historyEnabled, phoneChoices, readPhones, rememberPhone } from './phones/index.js'
 
@@ -73,6 +74,16 @@ async function askForPhone(): Promise<string> {
   return choice === ANOTHER_NUMBER ? typePhoneNumber() : choice
 }
 
+/** The 2FA prompt, shared by both login paths so they ask identically. */
+async function ask2FaPassword(): Promise<string> {
+  const twoFaPass = await password({ message: 'Enter your 2FA password:' })
+  if (isCancel(twoFaPass)) {
+    outro(chalk.yellow('Authentication cancelled'))
+    process.exit(0)
+  }
+  return twoFaPass
+}
+
 export async function ensureAuthenticated(tg: TelegramClient): Promise<User> {
   intro(chalk.cyan('Telegram Authentication'))
 
@@ -137,14 +148,7 @@ export async function ensureAuthenticated(tg: TelegramClient): Promise<User> {
     if (tl.RpcError.is(e, 'SESSION_PASSWORD_NEEDED')) {
       s.stop('2FA required')
 
-      // 2FA password
-      const twoFaPass = await password({
-        message: 'Enter your 2FA password:'
-      })
-      if (isCancel(twoFaPass)) {
-        outro(chalk.yellow('Authentication cancelled'))
-        process.exit(0)
-      }
+      const twoFaPass = await ask2FaPassword()
 
       s.start('Verifying 2FA...')
       const user = await withFloodWaitHandling(() => tg.checkPassword(twoFaPass))
@@ -155,4 +159,55 @@ export async function ensureAuthenticated(tg: TelegramClient): Promise<User> {
     }
     throw e
   }
+}
+
+/**
+ * Log in by scanning a QR code, the way Telegram Desktop's "Link Desktop
+ * Device" works. No phone number is typed; the phone that scans authorises it.
+ *
+ * The existing-session short-circuit below is duplicated from
+ * ensureAuthenticated rather than factored out: it is five lines whose only
+ * shared part is checkSession(), which already IS the shared piece. Extracting
+ * a wrapper would hide which messages each flow prints for no reuse worth the
+ * indirection.
+ */
+export async function ensureAuthenticatedQr(tg: TelegramClient): Promise<User> {
+  intro(chalk.cyan('Telegram Authentication (QR)'))
+
+  const s = spinner()
+  s.start('Checking session...')
+  const existingUser = await checkSession(tg)
+  if (existingUser) {
+    s.stop(chalk.green(`Logged in as ${existingUser.firstName} using session`))
+    outro('Session valid!')
+    return existingUser
+  }
+  s.stop('No valid session found')
+
+  console.log('Telegram app -> Settings -> Devices -> Link Desktop Device, then scan:')
+
+  const user = await tg.signInQr({
+    onUrlUpdated: (url, expires) => {
+      // ponytail: each token refresh (~30s) prints a whole new QR block instead
+      // of redrawing in place. Ceiling: a busy scrollback on a slow scan.
+      // Upgrade path: clear the previous block and redraw with ANSI cursor moves.
+      qrcodeTerminal.generate(url, { small: true }, (qr) => {
+        console.log(`\n${qr}`)
+        console.log(chalk.dim(`Refreshes automatically; this code expires at ${expires.toLocaleTimeString()}.`))
+      })
+    },
+    onQrScanned: () => {
+      console.log(chalk.cyan('Scanned! Finishing sign-in...'))
+    },
+    password: ask2FaPassword,
+    invalidPasswordCallback: () => {
+      console.log(chalk.red('Wrong password, try again.'))
+    }
+  })
+
+  // phoneNumber is null on privacy-restricted accounts, and rememberPhone takes
+  // a string - so there is simply nothing to remember in that case.
+  if (user.phoneNumber) rememberPhone(user.phoneNumber)
+  outro(chalk.green(`Authenticated as ${user.firstName}!`))
+  return user
 }

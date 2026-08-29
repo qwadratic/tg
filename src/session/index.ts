@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from 'node:fs'
 import type { TelegramClient, User } from '@mtcute/node'
-import { ensureAuthenticated, checkSession } from '../auth.js'
+import { ensureAuthenticated, ensureAuthenticatedQr, checkSession } from '../auth.js'
 import { createClient } from '../client.js'
 import { acquireLock } from './lock.js'
 import { OperatorError } from '../errors.js'
@@ -39,6 +39,11 @@ export interface OpenSessionOptions {
    * session that was created on another machine, or after rotating one.
    */
   forceImport?: boolean
+  /**
+   * Log in by scanning a QR code instead of typing a phone number. Ignored
+   * unless this run ends up needing an interactive login.
+   */
+  qr?: boolean
 }
 
 export interface SessionHandle {
@@ -133,7 +138,7 @@ export async function openSession(options: OpenSessionOptions = {}): Promise<Ses
       if (!user) {
         if (!interactive) throw noSessionError()
 
-        user = await ensureAuthenticated(tg)
+        user = options.qr ? await ensureAuthenticatedQr(tg) : await ensureAuthenticated(tg)
         writeSecret(SECRETS.session, await tg.exportSession())
         source = 'login'
       } else if (!vaultSession) {

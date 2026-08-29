@@ -1,6 +1,6 @@
 {
   "name": "@qwadratic/tg",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Read, archive and send your own Telegram from the command line or an agent",
   "keywords": [
     "telegram",
@@ -57,10 +57,12 @@
     "better-sqlite3-multiple-ciphers": "^12.6.2",
     "chalk": "^5.6.2",
     "commander": "^14.0.3",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "@types/node": "^25.2.0",
+    "@types/qrcode-terminal": "^0.12.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }

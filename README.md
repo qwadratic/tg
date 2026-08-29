@@ -254,6 +254,7 @@ cheapest-first:
 | command | purpose |
 | --- | --- |
 | `session login [--force]` | manual auth flow; stores the session string in psst |
+| `session login --qr` | same, but scan a QR code from the Telegram app instead of typing a number |
 | `session status [--json]` | session, peer cache and lock state; connects to nothing |
 | `session verify` | proves the peer cache survives across separate processes |
 | `session probe [--resolve n]` | one authenticated run, JSON report (used by `verify`) |

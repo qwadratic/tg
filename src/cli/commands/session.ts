@@ -71,11 +71,12 @@ export function registerSessionCommand(program: Command): void {
     .command('login')
     .description('Authenticate by hand and store the session string in psst')
     .option('--force', 'Discard the local cache and log in again')
+    .option('--qr', 'Log in by scanning a QR code instead of typing a phone number, like linking a desktop device')
     .action(async (options) => {
       await runCommand(async () => {
         if (options.force) resetLocalCache()
 
-        const handle = await openSession({ interactive: true, forceImport: options.force })
+        const handle = await openSession({ interactive: true, forceImport: options.force, qr: options.qr })
         try {
           const label = `${handle.user.firstName} ${handle.user.lastName ?? ''}`.trim()
           console.log(chalk.green(`\nLogged in as ${label} (@${handle.user.username ?? 'no username'})`))

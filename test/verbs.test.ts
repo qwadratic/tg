@@ -417,3 +417,36 @@ test('eval-114 sync loops once per --once, floors the interval, and holds one se
     assert.ok(!/console\.log\(/.test(text), `${file} writes to stdout; --json output must stay parseable`)
   }
 })
+
+test('eval-115 --qr is wired end to end and can never hand rememberPhone a null', () => {
+  // The live signInQr flow needs a real connection and a human holding a phone,
+  // so what is pinned here is the wiring: the flag reaches openSession, the QR
+  // path exists, and the one type-unsafe seam (User.phoneNumber is nullable,
+  // rememberPhone takes a string) stays guarded.
+  const read = (p: string) => readFileSync(fileURLToPath(new URL(`../src/${p}`, import.meta.url)), 'utf-8')
+
+  const auth = read('auth.ts')
+  assert.match(auth, /export async function ensureAuthenticatedQr\(/)
+  assert.match(auth, /tg\.signInQr\(/)
+  // Without this, a 2FA account gets a raw SESSION_PASSWORD_NEEDED throw instead of a prompt.
+  assert.match(auth, /password: ask2FaPassword/, 'signInQr must hand mtcute the 2FA prompt')
+
+  // Guarded: an `if (...)` or `?.` immediately around the call site.
+  const call = auth.indexOf('rememberPhone(user.phoneNumber)')
+  assert.ok(call !== -1, 'the QR path must remember the number it logged in with')
+  const before = auth.slice(Math.max(0, call - 60), call)
+  assert.match(before, /if \(user\.phoneNumber\)|user\.phoneNumber\?\./, 'rememberPhone must not be reachable with a null phoneNumber')
+
+  const helpTexts = ['cli/commands/auth.ts', 'cli/commands/session.ts'].map((file) => {
+    const source = read(file)
+    assert.match(source, /\.option\('--qr'/, `${file} must offer --qr`)
+    assert.match(source, /qr: options\.qr/, `${file} must thread --qr into openSession`)
+    return source.match(/\.option\('--qr', '([^']*)'\)/)?.[1]
+  })
+  // One flag, one description: the two verbs must not drift apart in --help.
+  assert.ok(helpTexts[0], 'auth.ts --qr must have a description')
+  assert.equal(helpTexts[0], helpTexts[1], '--qr help text must be identical in both commands')
+
+  // The branch itself, plus the option on the interface behind it.
+  assert.match(read('session/index.ts'), /options\.qr \? await ensureAuthenticatedQr\(tg\)/)
+})
