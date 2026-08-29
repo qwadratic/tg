@@ -10,7 +10,7 @@ export function registerSetupCommand(program: Command): void {
     .command('setup')
     .description('Select Telegram folders to export')
     .option('--select', 'Force folder re-selection')
-    .action(async (options) => {
+    .action(async (options: { select?: boolean }) => {
       await runCommand(async () => {
         intro(chalk.cyan('Export Setup'))
         await withAuthenticatedClient(async (tg) => {

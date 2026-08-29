@@ -35,7 +35,7 @@ export interface Check {
   status: CheckStatus
   detail: string
   /** What to run, when there is something to run. */
-  fix?: string
+  fix?: string | undefined
 }
 
 export interface DoctorReport {
@@ -45,7 +45,7 @@ export interface DoctorReport {
   workspace: string
   checks: Check[]
   /** The single next action, when there is one. */
-  hint?: string
+  hint?: string | undefined
   exitCode: number
 }
 
@@ -120,7 +120,7 @@ export function offlineChecks(): Check[] {
 
   // A lock held by a live process is not a fault; it is another run working.
   if (existsSync(LOCK_PATH)) {
-    let pid = 0
+    let pid: number
     try {
       pid = Number(readFileSync(LOCK_PATH, 'utf-8').trim())
     } catch {
@@ -181,13 +181,14 @@ export function summarise(checks: Check[], workspace: string): DoctorReport {
       exitCode: EXIT.needsHuman
     }
   }
-  if (failed.length > 0) {
+  const [firstFailed] = failed
+  if (firstFailed) {
     return {
       ok: false,
       status: 'not_configured',
       workspace,
       checks,
-      hint: failed[0].fix,
+      hint: firstFailed.fix,
       exitCode: EXIT.notConfigured
     }
   }

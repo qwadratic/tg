@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
 import {
   closeSync,
-  existsSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -160,7 +159,7 @@ export function writeState(state: UpdateState, path = stateFile()): void {
  */
 export function compareVersions(a: string, b: string): number {
   const split = (v: string) => {
-    const [core, pre] = v.replace(/^v/, '').split('-', 2)
+    const [core = '', pre] = v.replace(/^v/, '').split('-', 2)
     return { nums: core.split('.').map((n) => Number.parseInt(n, 10) || 0), pre }
   }
   const left = split(a)
@@ -470,7 +469,9 @@ export function scheduleUpdateCheck(currentVersion: string, argv: string[] = pro
   try {
     // The child re-runs this CLI in a mode that only checks and installs. Fully
     // detached and unref'd, so the foreground exits without waiting.
-    const child = spawn(process.execPath, [process.argv[1], 'update', '--background-update-check'], {
+    const entry = process.argv[1]
+    if (entry === undefined) return
+    const child = spawn(process.execPath, [entry, 'update', '--background-update-check'], {
       stdio: 'ignore',
       detached: true
     })

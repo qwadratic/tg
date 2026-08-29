@@ -47,9 +47,11 @@ export function parseCombinedSections(body: string): Map<number, ParsedSection> 
     if (line.startsWith('## Chat: ')) {
       flushBlock()
       flushSection()
-      const idMatch = line.match(/\((\-?\d+)\)\s*$/)
+      const idMatch = line.match(/\((-?\d+)\)\s*$/)
       if (!idMatch) continue
-      currentChatId = Number(idMatch[1])
+      const rawChatId = idMatch[1]
+      if (rawChatId === undefined) continue
+      currentChatId = Number(rawChatId)
       currentHeader = line
       continue
     }
@@ -58,7 +60,7 @@ export function parseCombinedSections(body: string): Map<number, ParsedSection> 
     if (headerMatch) {
       flushBlock()
       currentBlockLines = [line]
-      currentBlockDate = parseTimestamp(headerMatch[1])
+      currentBlockDate = parseTimestamp(headerMatch[1] ?? '')
       continue
     }
 

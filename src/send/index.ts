@@ -42,7 +42,7 @@ import { assertConfirmed, guardedSend, type SentRecord } from './gate.js'
 export type { SentRecord } from './gate.js'
 
 export interface SendTextOptions {
-  yes?: boolean
+  yes?: boolean | undefined
 }
 
 /** Send a plain text message to a numeric peer id. */
@@ -62,9 +62,9 @@ export async function sendText(
 }
 
 export interface SendMediaOptions extends SendTextOptions {
-  caption?: string
+  caption?: string | undefined
   /** Override the detected mime type. */
-  mime?: string
+  mime?: string | undefined
 }
 
 /**
@@ -113,7 +113,7 @@ export async function sendMedia(
       ...(kind === 'video' ? { supportsStreaming: true } : {}),
       ...(options.mime ? { fileMime: options.mime } : {}),
       ...(options.caption ? { caption: options.caption } : {})
-    } as never)
+    })
   )
 }
 
@@ -138,7 +138,8 @@ export async function deleteMessages(
   const peerId = assertPeerId(rawPeer)
   assertConfirmed(options)
 
-  if (messageIds.length === 0) throw new OperatorError('Give at least one message id to delete.')
+  const [firstId] = messageIds
+  if (firstId === undefined) throw new OperatorError('Give at least one message id to delete.')
   for (const id of messageIds) {
     if (!Number.isInteger(id) || id <= 0) {
       throw new OperatorError(`Not a message id: ${id}. Ids are positive integers.`)
@@ -148,7 +149,7 @@ export async function deleteMessages(
   const peer = await tg.resolvePeer(peerId)
   return guardedSend(peerId, 'delete', messageIds.length, async () => {
     await tg.deleteMessagesById(peer, messageIds, { revoke: true })
-    return { id: messageIds[0] }
+    return { id: firstId }
   })
 }
 

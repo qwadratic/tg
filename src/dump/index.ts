@@ -53,7 +53,7 @@ export function messageRefs(msg: Message): string[] {
 
   if (media) {
     for (const key of ['url', 'displayUrl'] as const) {
-      if (typeof media[key] === 'string') refs.push(`preview:${media[key] as string}`)
+      if (typeof media[key] === 'string') refs.push(`preview:${media[key]}`)
     }
     if (typeof media.fileName === 'string') refs.push(`file:${media.fileName}`)
     if (typeof media.title === 'string') refs.push(`title:${media.title}`)
@@ -64,9 +64,9 @@ export function messageRefs(msg: Message): string[] {
 
 export interface DumpOptions {
   /** Cap on messages read. */
-  limit?: number
+  limit?: number | undefined
   /** Stop at messages older than this. */
-  since?: Date
+  since?: Date | undefined
 }
 
 /**

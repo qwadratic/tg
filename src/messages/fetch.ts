@@ -6,9 +6,9 @@ import { sleep } from '../utils/sleep.js'
  */
 export interface FetchMessagesOptions {
   /** Only fetch messages with ID > minId (exclusive). For incremental sync. */
-  minId?: number
+  minId?: number | undefined
   /** Called every 100 messages with current count. */
-  onProgress?: (count: number) => void
+  onProgress?: ((count: number) => void) | undefined
   /**
    * Stop after yielding this many messages.
    *
@@ -16,7 +16,7 @@ export interface FetchMessagesOptions {
    * slice, not the whole history. Omitted means "until the chat runs out",
    * which is what the export path needs.
    */
-  limit?: number
+  limit?: number | undefined
   /**
    * Stop when a message older than this is reached.
    *
@@ -24,7 +24,7 @@ export interface FetchMessagesOptions {
    * every remaining message is older too and the walk can end there. That is
    * the difference between reading a week and reading ten years.
    */
-  since?: Date
+  since?: Date | undefined
 }
 
 /**
@@ -54,7 +54,9 @@ export async function* fetchMessages(
 
   for await (const msg of tg.iterHistory(chatId, {
     chunkSize,
-    minId: options?.minId
+    // Spread, not `minId: options?.minId`: mtcute declares minId as
+    // optional-without-undefined, which exactOptionalPropertyTypes rejects.
+    ...(options?.minId === undefined ? {} : { minId: options.minId })
   })) {
     // Newest-first, so the first message past the cutoff ends the walk: every
     // message after it is older still.

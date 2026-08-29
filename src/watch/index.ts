@@ -20,15 +20,15 @@ export interface WatchOptions {
   /** Where downloads land. */
   destDir: string
   /** Media kinds to accept. Empty means any. */
-  kinds?: readonly string[]
+  kinds?: readonly string[] | undefined
   /** Give up after this long. */
-  timeoutMinutes?: number
+  timeoutMinutes?: number | undefined
   /** Seconds between polls. */
-  intervalSeconds?: number
+  intervalSeconds?: number | undefined
   /** Stop after this many files. */
-  max?: number
-  onFile?: (file: PulledFile) => void
-  onPoll?: (attempt: number) => void
+  max?: number | undefined
+  onFile?: ((file: PulledFile) => void) | undefined
+  onPoll?: ((attempt: number) => void) | undefined
 }
 
 /**

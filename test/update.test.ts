@@ -38,26 +38,26 @@ test('eval-66 version comparison orders releases and keeps prereleases below the
 })
 
 test('eval-67 updates are skipped in CI, when disabled, and outside a global install', () => {
-  assert.equal(updateSkipReason({ TG_NO_UPDATE: '1' } as never), 'disabled')
-  assert.equal(updateSkipReason({ NO_UPDATE_NOTIFIER: '1' } as never), 'disabled')
+  assert.equal(updateSkipReason({ TG_NO_UPDATE: '1' }), 'disabled')
+  assert.equal(updateSkipReason({ NO_UPDATE_NOTIFIER: '1' }), 'disabled')
   // A build agent that silently installs a different version makes its own
   // pipeline unreproducible.
-  assert.equal(updateSkipReason({ CI: 'true' } as never), 'ci')
+  assert.equal(updateSkipReason({ CI: 'true' }), 'ci')
 
   // This test suite runs from a checkout, never from node_modules/@qwadratic/tg,
   // so the global-install guard must be the reason here. That guard is what stops
   // `npm install -g` from overwriting a developer's working copy.
-  assert.equal(updateSkipReason({} as never), 'not-a-global-install')
+  assert.equal(updateSkipReason({}), 'not-a-global-install')
 })
 
 test('eval-68 the check interval is honoured and a missing or corrupt state re-checks', () => {
   const now = Date.parse('2026-08-18T12:00:00.000Z')
   const at = (hoursAgo: number) => new Date(now - hoursAgo * 3600_000).toISOString()
 
-  assert.equal(isCheckDue({}, now, {} as never), true, 'never checked')
-  assert.equal(isCheckDue({ lastCheckAt: 'garbage' }, now, {} as never), true, 'unparseable')
-  assert.equal(isCheckDue({ lastCheckAt: at(1) }, now, {} as never), false, 'checked an hour ago')
-  assert.equal(isCheckDue({ lastCheckAt: at(25) }, now, {} as never), true, 'checked yesterday')
+  assert.equal(isCheckDue({}, now, {}), true, 'never checked')
+  assert.equal(isCheckDue({ lastCheckAt: 'garbage' }, now, {}), true, 'unparseable')
+  assert.equal(isCheckDue({ lastCheckAt: at(1) }, now, {}), false, 'checked an hour ago')
+  assert.equal(isCheckDue({ lastCheckAt: at(25) }, now, {}), true, 'checked yesterday')
 
   // Interval is configurable, and nonsense falls back to the default.
   const env = { TG_UPDATE_INTERVAL_HOURS: '1' } as never
@@ -120,7 +120,7 @@ test('eval-72 the CLI version matches package.json', () => {
 test('eval-73 the notice never promises a background update that will not happen', () => {
   const now = Date.parse('2026-08-18T12:00:00.000Z')
   const at = (h: number) => new Date(now - h * 3600_000).toISOString()
-  const plan = (state: UpdateState) => planUpdate(state, '0.3.0', now, {} as never)
+  const plan = (state: UpdateState) => planUpdate(state, '0.3.0', now, {})
 
   // Nothing known, interval elapsed: check quietly, say nothing.
   const fresh = plan({})
@@ -173,6 +173,11 @@ test('eval-74 a skip reason wins even over an explicitly typed update', async ()
   const { runUpdateCheck } = await import('../src/update/index.js')
 
   const original = process.env.CI
+  // An ambient TG_NO_UPDATE=1 - which AGENTS.md tells agents to set when
+  // scripting tg - would answer 'disabled' before the CI guard is reached, so
+  // this test failed from a clean tree depending on the caller's shell.
+  const originalNoUpdate = process.env.TG_NO_UPDATE
+  delete process.env.TG_NO_UPDATE
   process.env.CI = 'true'
   try {
     const outcome = await runUpdateCheck('0.3.0', { force: true })
@@ -182,6 +187,7 @@ test('eval-74 a skip reason wins even over an explicitly typed update', async ()
   } finally {
     if (original === undefined) delete process.env.CI
     else process.env.CI = original
+    if (originalNoUpdate !== undefined) process.env.TG_NO_UPDATE = originalNoUpdate
   }
 })
 
@@ -279,7 +285,7 @@ test('eval-78 a failed registry call is silent and never throws', async () => {
   ]
 
   for (const impl of failures) {
-    const result = await fetchLatestVersion('@qwadratic/tg', 500, impl as unknown as typeof fetch)
+    const result = await fetchLatestVersion('@qwadratic/tg', 500, impl)
     assert.equal(result, null, 'every failure mode resolves to null, never a rejection')
   }
 })
@@ -349,10 +355,10 @@ test('eval-81 two processes never install into the same prefix at once', async (
     const second = acquireInstallLock(lock)
     assert.equal(second, null, 'the second caller is refused, not queued')
 
-    first!()
+    first()
     const third = acquireInstallLock(lock)
     assert.ok(third, 'the lock is reusable once released')
-    third!()
+    third()
 
     // A lock left by a crashed install must not block updates forever. Pid 1 is
     // alive, so use a pid that cannot be.
@@ -360,13 +366,13 @@ test('eval-81 two processes never install into the same prefix at once', async (
     writeFileSync(lock, '999999999\n')
     const afterCrash = acquireInstallLock(lock)
     assert.ok(afterCrash, 'a lock owned by a dead pid is reclaimed')
-    afterCrash!()
+    afterCrash()
 
     // Garbage is reclaimed too, rather than wedging the updater.
     writeFileSync(lock, 'not-a-pid\n')
     const afterGarbage = acquireInstallLock(lock)
     assert.ok(afterGarbage, 'an unparseable lock is reclaimed')
-    afterGarbage!()
+    afterGarbage()
   })
 })
 
@@ -396,19 +402,19 @@ test('eval-83 the old TGU_ setting names still work, loudly', async () => {
   // number prompt. A rename whose failure mode is a hang needs a bridge.
   resetSettingWarnings()
 
-  assert.equal(setting('NON_INTERACTIVE', { TG_NON_INTERACTIVE: '1' } as never), '1')
-  assert.equal(setting('NON_INTERACTIVE', { TGU_NON_INTERACTIVE: '1' } as never), '1', 'legacy still read')
+  assert.equal(setting('NON_INTERACTIVE', { TG_NON_INTERACTIVE: '1' }), '1')
+  assert.equal(setting('NON_INTERACTIVE', { TGU_NON_INTERACTIVE: '1' }), '1', 'legacy still read')
 
   // The new name wins when both are set, so a half-migrated environment
   // resolves toward the future rather than the past.
   assert.equal(
-    setting('NON_INTERACTIVE', { TG_NON_INTERACTIVE: 'new', TGU_NON_INTERACTIVE: 'old' } as never),
+    setting('NON_INTERACTIVE', { TG_NON_INTERACTIVE: 'new', TGU_NON_INTERACTIVE: 'old' }),
     'new'
   )
 
   // Empty is not a value: an exported-but-blank var must not mask the fallback.
-  assert.equal(setting('DATA_DIR', { TG_DATA_DIR: '', TGU_DATA_DIR: 'legacy' } as never), 'legacy')
-  assert.equal(setting('DATA_DIR', {} as never), undefined, 'callers keep their own defaults')
+  assert.equal(setting('DATA_DIR', { TG_DATA_DIR: '', TGU_DATA_DIR: 'legacy' }), 'legacy')
+  assert.equal(setting('DATA_DIR', {}), undefined, 'callers keep their own defaults')
 
   // No setting name may collide with a vault SECRET name, or a config lookup
   // and a credential lookup would fight over the same variable.

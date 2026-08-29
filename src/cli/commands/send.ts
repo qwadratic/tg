@@ -1,7 +1,6 @@
 import { confirm, isCancel } from '@clack/prompts'
 import chalk from 'chalk'
 import type { Command } from 'commander'
-import type { TelegramClient } from '@mtcute/node'
 import {
   deleteMessages,
   editMessageText,
@@ -88,6 +87,9 @@ function report(record: SentRecord, json = false): void {
   logSummary(`sent ${record.kind} to ${record.peerId} as message ${record.messageId}`)
 }
 
+/** Every send subcommand carries these two; the rest are per-command. */
+interface SendFlags { yes?: boolean; json?: boolean }
+
 export function registerSendCommand(program: Command): void {
   const send = program
     .command('send')
@@ -99,7 +101,7 @@ export function registerSendCommand(program: Command): void {
     .description('Send a text message (id, @username or t.me link)')
     .option('--yes', 'Skip the recipient confirmation; required for unattended runs')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string, text: string, options) => {
+    .action(async (peer: string, text: string, options: SendFlags) => {
       await runCommand(async () => {
         parsePeerRef(peer)
         assertConfirmed(options)
@@ -118,7 +120,7 @@ export function registerSendCommand(program: Command): void {
     .option('--mime <type>', 'Override the detected mime type')
     .option('--yes', 'Skip the recipient confirmation; required for unattended runs')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string, file: string, options) => {
+    .action(async (peer: string, file: string, options: SendFlags & { caption?: string; mime?: string }) => {
       await runCommand(async () => {
         parsePeerRef(peer)
         assertConfirmed(options)
@@ -142,7 +144,7 @@ export function registerSendCommand(program: Command): void {
     .description('Delete messages you sent, for everyone (id, @username or t.me link)')
     .option('--yes', 'Skip the confirmation; required for unattended runs')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string, ids: string[], options) => {
+    .action(async (peer: string, ids: string[], options: SendFlags) => {
       await runCommand(async () => {
         parsePeerRef(peer)
         assertConfirmed(options)
@@ -174,7 +176,7 @@ export function registerSendCommand(program: Command): void {
     .requiredOption('--to <target>', 'Destination chat (id, @username or t.me link)')
     .option('--yes', 'Skip the confirmation; required for unattended runs')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string, ids: string[], options) => {
+    .action(async (peer: string, ids: string[], options: SendFlags & { to: string }) => {
       await runCommand(async () => {
         parsePeerRef(peer)
         parsePeerRef(options.to)
@@ -216,7 +218,7 @@ export function registerSendCommand(program: Command): void {
     .description('Edit the text of a message you sent (id, @username or t.me link)')
     .option('--yes', 'Skip the confirmation; required for unattended runs')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string, id: string, text: string, options) => {
+    .action(async (peer: string, id: string, text: string, options: SendFlags) => {
       await runCommand(async () => {
         parsePeerRef(peer)
         assertConfirmed(options)
@@ -243,7 +245,7 @@ export function registerSendCommand(program: Command): void {
     .description('Mark a chat as read, up to its latest message (id, @username or t.me link)')
     .option('--yes', 'Skip the confirmation; required for unattended runs')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string, options) => {
+    .action(async (peer: string, options: SendFlags) => {
       await runCommand(async () => {
         parsePeerRef(peer)
         assertConfirmed(options)
@@ -259,7 +261,7 @@ export function registerSendCommand(program: Command): void {
     .command('log')
     .description('Show what this workspace has sent')
     .option('--json', 'Machine-readable output')
-    .action(async (options) => {
+    .action(async (options: { json?: boolean }) => {
       // Reads a local file; no client, no lock, no network.
       await runCommand(async () => {
         const records = readSendLog()
@@ -295,7 +297,7 @@ export function registerSendCommand(program: Command): void {
     .description('Send a note to your own Saved Messages')
     .option('--yes', 'Required for unattended runs')
     .option('--json', 'Machine-readable output')
-    .action(async (text: string, options) => {
+    .action(async (text: string, options: SendFlags) => {
       await runCommand(async () => {
         if (!text.trim()) throw new OperatorError('Give some text to save.')
         assertConfirmed(options)

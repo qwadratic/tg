@@ -122,7 +122,7 @@ export function parseBrainMap(raw: string | undefined): Map<number, string> {
 export function readFolderIds(content: string): number[] {
   const match = /^folder_ids:\s*\[([^\]]*)\]\s*$/m.exec(content)
   if (!match) return []
-  return match[1]
+  return (match[1] ?? '')
     .split(',')
     .map((part) => part.trim())
     .filter((part) => part.length > 0)   // `[]` must be empty, not [NaN] and not [0]
@@ -234,9 +234,10 @@ export function unroutableError(skipped: UnroutableFile[]): ShipError {
 
   const lines = [`${skipped.length} file(s) cannot be routed to a brain:`]
 
-  if (byReason['no-folder'].length > 0) {
+  const firstNoFolder = byReason['no-folder'][0]
+  if (firstNoFolder) {
     lines.push(
-      `  ${byReason['no-folder'].length} in no tracked folder, e.g. ${basename(byReason['no-folder'][0].file)}`,
+      `  ${byReason['no-folder'].length} in no tracked folder, e.g. ${basename(firstNoFolder.file)}`,
       '    Track the folder they live in (tg setup), or pass --skip-unroutable.'
     )
   }
@@ -289,13 +290,13 @@ function heartbeat(status: string, details: Record<string, unknown>): void {
  * safe precisely because the slug makes each capture idempotent.
  */
 export function ship(options: {
-  archiveDir?: string
-  dryRun?: boolean
-  brainMap?: Map<number, string>
-  gbrainBin?: string
-  all?: boolean
+  archiveDir?: string | undefined
+  dryRun?: boolean | undefined
+  brainMap?: Map<number, string> | undefined
+  gbrainBin?: string | undefined
+  all?: boolean | undefined
   /** Ship what CAN be routed; report the rest instead of failing the run. */
-  skipUnroutable?: boolean
+  skipUnroutable?: boolean | undefined
 } = {}): { shipped: number; captures: number; skipped: number } {
   const archiveDir = options.archiveDir ?? join('data', 'archive')
   const stamp = join(archiveDir, '.last-ship')
@@ -305,7 +306,7 @@ export function ship(options: {
 
   const startedAt = Date.now()
   let captures = 0
-  let entries: ShipPlanEntry[] = []
+  let entries: ShipPlanEntry[]
   let skipped: UnroutableFile[] = []
 
   try {

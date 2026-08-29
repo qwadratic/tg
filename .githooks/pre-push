@@ -15,9 +15,10 @@
 ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT" || exit 1
 
-echo "pre-push: typecheck, test, build, package contents (same as CI's test job)"
+echo "pre-push: typecheck, lint, test, build, package contents (same as CI's test job)"
 
 pnpm run typecheck \
+  && pnpm run lint \
   && pnpm test \
   && pnpm run build \
   && node scripts/check-package-contents.mjs

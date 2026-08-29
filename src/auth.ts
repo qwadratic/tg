@@ -1,4 +1,4 @@
-import { TelegramClient, tl, User, SentCode } from '@mtcute/node'
+import { TelegramClient, tl, User } from '@mtcute/node'
 import { text, password, select, isCancel, intro, outro, spinner } from '@clack/prompts'
 import chalk from 'chalk'
 import qrcodeTerminal from 'qrcode-terminal'
@@ -38,6 +38,7 @@ async function typePhoneNumber(): Promise<string> {
       if (!value || !value.match(/^\+?[0-9]{7,15}$/)) {
         return 'Please enter a valid phone number'
       }
+      return undefined
     }
   })
   if (isCancel(phone)) {
@@ -113,7 +114,7 @@ export async function ensureAuthenticated(tg: TelegramClient): Promise<User> {
     return sentCodeResult
   }
 
-  const sentCode = sentCodeResult as SentCode
+  const sentCode = sentCodeResult
   s.stop('Code sent!')
 
   // Get code from user
@@ -123,6 +124,7 @@ export async function ensureAuthenticated(tg: TelegramClient): Promise<User> {
       if (!value || !value.match(/^[0-9]{5}$/)) {
         return 'Code should be 5 digits'
       }
+      return undefined
     }
   })
   if (isCancel(code)) {

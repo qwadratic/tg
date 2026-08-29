@@ -18,7 +18,7 @@ export function registerExportSyncCommand(exportCommand: Command): void {
       '--chats <ids>',
       'Comma-separated chat ids to export instead of the tracked folders. Everything else is left untouched.'
     )
-    .action(async (opts: { privateOnly?: boolean; chats?: string }) => {
+    .action(async (opts: { privateOnly?: boolean | undefined; chats?: string | undefined }) => {
       await runCommand(async () => {
         intro(chalk.cyan('Export Chats'))
         await withAuthenticatedClient(

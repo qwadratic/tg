@@ -26,7 +26,7 @@ export function registerPeersCommand(program: Command): void {
     .option('--no-bots', 'Exclude bot chats')
     .option('--limit <n>', 'Dialogs to walk', '500')
     .option('--json', 'Machine-readable output')
-    .action(async (options) => {
+    .action(async (options: { type?: string; since?: string; bots: boolean; limit: string; json?: boolean }) => {
       await runCommand(async () => {
         // Parsed before the session is opened, so a bad --since costs no
         // connection and no lock. Pinned by eval-61.
@@ -59,7 +59,7 @@ export function registerPeersCommand(program: Command): void {
       '--id-only',
       'Print just the id of the single best match, for shell composition. Fails if the needle is ambiguous.'
     )
-    .action(async (needle: string, options) => {
+    .action(async (needle: string, options: { limit: string; json?: boolean; idOnly?: boolean }) => {
       await runCommand(async () => {
         if (!needle.trim()) throw new OperatorError('Give a name to search for.')
 
@@ -90,7 +90,9 @@ export function registerPeersCommand(program: Command): void {
               EXIT.usage
             )
           }
-          process.stdout.write(`${found[0].id}\n`)
+          const [only] = found
+          if (!only) throw new OperatorError(`No chat matches ${JSON.stringify(needle)}.`, EXIT.usage)
+          process.stdout.write(`${only.id}\n`)
           return
         }
 

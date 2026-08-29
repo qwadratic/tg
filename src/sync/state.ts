@@ -24,7 +24,7 @@ export interface SyncState {
   folders: Record<number, {
     chatIds: number[]     // Snapshot at last sync
     lastSyncedAt: string
-    title?: string        // Cached for display; absent in states written before v0.2
+    title?: string | undefined        // Cached for display; absent in states written before v0.2
   }>
 }
 
@@ -111,7 +111,7 @@ export function updateFolderState(
   state: SyncState,
   folderId: number,
   chatIds: number[],
-  title?: string
+  title?: string | undefined
 ): void {
   state.folders[folderId] = {
     chatIds,

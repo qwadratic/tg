@@ -24,7 +24,7 @@ export function registerDoctorCommand(program: Command): void {
     .description('Check whether unattended runs will work, and say what to fix')
     .option('--offline', 'Skip the liveness probe; touch no network')
     .option('--json', 'Machine-readable output')
-    .action(async (options) => {
+    .action(async (options: { offline?: boolean; json?: boolean }) => {
       await runCommand(async () => {
         const checks: Check[] = offlineChecks()
 

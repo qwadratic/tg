@@ -10,11 +10,11 @@ export async function importContactsByPhone(
   tg: TelegramClient,
   phones: string[],
   options: {
-    batchSize?: number
-    delayMs?: number
-    onProgress?: (checked: number, total: number) => void
-    deleteAfter?: boolean
-    debug?: boolean
+    batchSize?: number | undefined
+    delayMs?: number | undefined
+    onProgress?: ((checked: number, total: number) => void) | undefined
+    deleteAfter?: boolean | undefined
+    debug?: boolean | undefined
   } = {}
 ): Promise<ImportResult[]> {
   const batchSize = options.batchSize && options.batchSize > 0

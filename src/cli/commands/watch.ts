@@ -24,7 +24,7 @@ export function registerWatchCommand(program: Command): void {
     .option('--interval <seconds>', 'Seconds between polls', '15')
     .option('--max <n>', 'Stop after this many files', '1')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string | undefined, options) => {
+    .action(async (peer: string | undefined, options: { to: string; kind?: string; minutes: string; interval: string; max: string; json?: boolean }) => {
       await runCommand(async () => {
         const minutes = Number.parseInt(options.minutes, 10)
         const interval = Number.parseInt(options.interval, 10)

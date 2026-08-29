@@ -20,7 +20,7 @@ export function registerDumpCommand(program: Command): void {
     .option('--since <date>', 'Stop at messages older than this')
     .option('--limit <n>', 'Maximum messages to read', '600')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string, options) => {
+    .action(async (peer: string, options: { since?: string; limit: string; json?: boolean }) => {
       await runCommand(async () => {
         // Validate every argument BEFORE opening a session. Otherwise a typo in
         // --since costs a connection and the single-instance lock, and reports

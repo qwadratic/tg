@@ -61,7 +61,7 @@ async function appendOrWriteChat(options: {
       messagesAppended: messagesWritten,
       filesUpdated: filesWritten,
       skipped: false,
-      newestMsgId: options.messages[0].id
+      newestMsgId: options.messages[0]?.id ?? 0
     }
   }
 
@@ -71,7 +71,7 @@ async function appendOrWriteChat(options: {
     messagesAppended: result.messagesAppended,
     filesUpdated: result.messagesAppended > 0 ? 1 : 0,
     skipped: false,
-    newestMsgId: options.messages[0].id
+    newestMsgId: options.messages[0]?.id ?? 0
   }
 }
 
@@ -135,7 +135,7 @@ export function isPrivateChat(chatId: number): boolean {
 export async function syncChats(
   tg: TelegramClient,
   config: Config,
-  options: { privateOnly?: boolean } = {}
+  options: { privateOnly?: boolean | undefined } = {}
 ): Promise<SyncResult> {
   const startTime = Date.now()
   const state = loadState()

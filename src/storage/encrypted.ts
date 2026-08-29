@@ -33,7 +33,7 @@ export class EncryptedSqliteStorage extends BaseSqliteStorageDriver {
       db.close()
       const message = error instanceof Error ? error.message : String(error)
       if (/file is not a database|file is encrypted|wrong key/i.test(message)) {
-        throw new Error('Invalid session password.')
+        throw new Error('Invalid session password.', { cause: error })
       }
       throw error
     }

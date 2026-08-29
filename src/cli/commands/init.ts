@@ -15,7 +15,7 @@ export function registerInitCommand(program: Command): void {
     .command('init')
     .description('Make the current directory a tg workspace with its own session')
     .option('--json', 'Machine-readable output')
-    .action(async (options) => {
+    .action(async (options: { json?: boolean }) => {
       await runCommand(async () => {
         // Scaffolding never depends on psst. `init` only makes directories and
         // protects them from git, and a missing secret store is not a reason to

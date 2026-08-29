@@ -49,6 +49,11 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
+      # Same gate as typecheck and in the same job, so the two cannot drift:
+      # `any` and the type-checked rules fail here, not in review.
+      - name: Lint
+        run: pnpm run lint
+
       - name: Test
         run: pnpm test
 

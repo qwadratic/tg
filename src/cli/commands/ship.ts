@@ -19,7 +19,7 @@ export function registerShipCommand(program: Command): void {
       '--skip-unroutable',
       'Ship what can be routed and report the rest, instead of failing the whole run'
     )
-    .action(async (options) => {
+    .action(async (options: { dryRun?: boolean; all?: boolean; skipUnroutable?: boolean }) => {
       await runCommand(async () => {
         const { shipped, captures, skipped } = ship({
           dryRun: options.dryRun,

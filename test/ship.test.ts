@@ -65,7 +65,7 @@ function fakeGbrain(dir: string, exitCode = 0): string {
 function calls(dir: string): { argv: string[]; stdin: string }[] {
   const log = join(dir, 'calls.jsonl')
   if (!existsSync(log)) return []
-  return readFileSync(log, 'utf-8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+  return readFileSync(log, 'utf-8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as { argv: string[]; stdin: string })
 }
 
 test('eval-40 the slug is derived from the archive filename and is byte-stable', () => {
@@ -303,7 +303,8 @@ test('eval-49 every run appends exactly one heartbeat line, success or failure',
       process.env.TG_HEARTBEAT_PATH = previous
     }
 
-    const lines = readFileSync(beat, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    const lines = readFileSync(beat, 'utf-8').trim().split('\n')
+      .map((l) => JSON.parse(l) as { ts: string; event: string; status: string; source_version?: string; details?: unknown })
     assert.equal(lines.length, 2)
     assert.deepEqual(lines.map((l) => l.status), ['ok', 'error'])
     for (const line of lines) {
@@ -345,7 +346,7 @@ test('eval-92 unroutable files cost one file each, not the whole run', async () 
   // directly, or the folder changed later. Failing the run on the first one
   // meant those 38 blocked the other 92 from ever reaching the brain. Refusing
   // to GUESS is the invariant; refusing to ship anything is not.
-  await withTempDir(async (dir) => {
+  await withTempDir(async (_dir) => {
     mkdirSync('archive', { recursive: true })
     writeFileSync(join('archive', 'good_1.md'), page('[7]'))
     writeFileSync(join('archive', 'orphan_2.md'), page('[]'))

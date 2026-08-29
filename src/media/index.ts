@@ -68,6 +68,7 @@ export function mediaFilename(msg: Message): string {
     const safe = original
       // Take the basename only: "../../etc/passwd" must not escape destDir.
       .replace(/^.*[/\\]/, '')
+      // eslint-disable-next-line no-control-regex -- stripping control characters is the point
       .replace(/[<>:"|?*\x00-\x1f]/g, '')
       .replace(/\s+/g, '-')
       // A name that is only dots ("." or "..") would resolve to a directory.
@@ -84,15 +85,15 @@ export interface PullOptions {
   /** Destination directory. Created if absent. */
   destDir: string
   /** Media kinds to keep. Empty means every kind. */
-  kinds?: readonly string[]
+  kinds?: readonly string[] | undefined
   /** Stop after this many downloads. */
-  max?: number
+  max?: number | undefined
   /** Cap on messages scanned while looking for matches. */
-  scanLimit?: number
+  scanLimit?: number | undefined
   /** Ignore messages older than this. */
-  since?: Date
+  since?: Date | undefined
   /** Called per file, for progress on a slow download. */
-  onFile?: (file: PulledFile) => void
+  onFile?: ((file: PulledFile) => void) | undefined
 }
 
 /**

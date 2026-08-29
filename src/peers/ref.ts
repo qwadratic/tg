@@ -79,7 +79,7 @@ export function parsePeerRef(raw: string): PeerRef {
   // A link. Invite links point at a join flow, not a peer that can be resolved.
   const link = LINK.exec(trimmed)
   if (link) {
-    const handle = link[1]
+    const handle = link[1] ?? ''
     if (handle.startsWith('+') || handle.toLowerCase() === 'joinchat') {
       throw invalid(
         raw,
@@ -128,7 +128,7 @@ export async function resolvePeerRef(tg: TelegramClient, raw: string): Promise<R
 
   let peer: { id: number; displayName?: string; username?: string | null }
   try {
-    peer = (await tg.getPeer(ref.value as never)) as never
+    peer = (await tg.getPeer(ref.value))
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new OperatorError(

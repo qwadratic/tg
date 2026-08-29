@@ -47,8 +47,9 @@
     "start": "node dist/index.js",
     "test": "tsx --test",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
     "coverage": "rm -rf coverage && npx c8 tsx --test",
-    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+    "prepublishOnly": "npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "dependencies": {
     "@clack/prompts": "^1.0.0",
@@ -61,9 +62,12 @@
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^25.2.0",
     "@types/qrcode-terminal": "^0.12.2",
+    "eslint": "^10.9.1",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.68.0"
   }
 }

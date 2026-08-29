@@ -28,8 +28,8 @@ import { withTempDir } from './helpers.js'
 const src = (file: string) =>
   readFileSync(fileURLToPath(new URL(`../src/${file}`, import.meta.url)), 'utf-8')
 
-test('eval-101 the most recently used number is offered first, and repeats merge', () => {
-  withTempDir(() => {
+test('eval-101 the most recently used number is offered first, and repeats merge', async () => {
+  await withTempDir(() => {
     const path = join(process.cwd(), 'phones.json')
     const at = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000)
 
@@ -48,10 +48,10 @@ test('eval-101 the most recently used number is offered first, and repeats merge
   })
 })
 
-test('eval-102 formatting differences do not create a second entry', () => {
+test('eval-102 formatting differences do not create a second entry', async () => {
   // Someone types +1 555 000 1111 once and +15550001111 the next time. Two
   // rows for one phone makes the picker useless exactly as it grows.
-  withTempDir(() => {
+  await withTempDir(() => {
     const path = join(process.cwd(), 'phones.json')
     for (const spelling of ['+1 555 000 1111', '+1-555-000-1111', '(1) 555.000.1111', '15550001111']) {
       rememberPhone(spelling, { path })
@@ -63,8 +63,8 @@ test('eval-102 formatting differences do not create a second entry', () => {
   })
 })
 
-test('eval-103 the list is capped on disk, not just on the way out', () => {
-  withTempDir(() => {
+test('eval-103 the list is capped on disk, not just on the way out', async () => {
+  await withTempDir(() => {
     const path = join(process.cwd(), 'phones.json')
     for (let i = 0; i < MAX_REMEMBERED + 4; i++) {
       rememberPhone(`+1555000${String(1000 + i)}`, { path, now: new Date(Date.now() + i * 60_000) })
@@ -97,8 +97,8 @@ test('eval-104b a state directory we do not own does not break login', () => {
   }
 })
 
-test('eval-104 the file is 0600, and stays 0600 when rewritten', () => {
-  withTempDir(() => {
+test('eval-104 the file is 0600, and stays 0600 when rewritten', async () => {
+  await withTempDir(() => {
     const path = join(process.cwd(), 'phones.json')
 
     rememberPhone('+15550001111', { path })
@@ -115,8 +115,8 @@ test('eval-104 the file is 0600, and stays 0600 when rewritten', () => {
   })
 })
 
-test('eval-105 a corrupt or hostile file never breaks a login', () => {
-  withTempDir(() => {
+test('eval-105 a corrupt or hostile file never breaks a login', async () => {
+  await withTempDir(() => {
     const path = join(process.cwd(), 'phones.json')
 
     for (const contents of [
@@ -139,9 +139,9 @@ test('eval-105 a corrupt or hostile file never breaks a login', () => {
   })
 })
 
-test('eval-106 forgetting actually removes, and "all" clears', () => {
+test('eval-106 forgetting actually removes, and "all" clears', async () => {
   // Storing personal data with no way to remove it is a trap, not a feature.
-  withTempDir(() => {
+  await withTempDir(() => {
     const path = join(process.cwd(), 'phones.json')
     rememberPhone('+15550001111', { path })
     rememberPhone('+442071234567', { path })
@@ -155,8 +155,8 @@ test('eval-106 forgetting actually removes, and "all" clears', () => {
   })
 })
 
-test('eval-107 history can be switched off entirely', () => {
-  withTempDir(() => {
+test('eval-107 history can be switched off entirely', async () => {
+  await withTempDir(() => {
     const path = join(process.cwd(), 'phones.json')
     const previous = process.env.TG_NO_PHONE_HISTORY
 
@@ -210,7 +210,7 @@ test('eval-109 a number is only remembered after Telegram accepts it', () => {
   assert.ok(sendCode !== -1)
   for (const match of remembers) {
     assert.ok(
-      match.index! > sendCode,
+      match.index > sendCode,
       'a number is recorded before Telegram has been asked about it'
     )
   }
@@ -219,7 +219,7 @@ test('eval-109 a number is only remembered after Telegram accepts it', () => {
   const returns = [...auth.matchAll(/^\s*return user$/gm)]
   assert.ok(returns.length >= 2, `expected the sign-in and 2FA returns, found ${returns.length}`)
   for (const ret of returns) {
-    const preceding = auth.slice(0, ret.index!)
+    const preceding = auth.slice(0, ret.index)
     assert.ok(
       preceding.lastIndexOf('rememberPhone(') > preceding.lastIndexOf('s.start('),
       'a successful login returned without recording the number it used'

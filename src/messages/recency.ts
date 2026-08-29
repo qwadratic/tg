@@ -118,8 +118,7 @@ export async function exportRecencyChats(
 
   const nextRecencyChats: typeof recencyState.chats = {}
 
-  for (let i = 0; i < chatIdArray.length; i++) {
-    const chatId = chatIdArray[i]
+  for (const [i, chatId] of chatIdArray.entries()) {
     const chatIndex = i + 1
     s.message(`Exporting ${mode}: chat ${chatIndex} of ${totalChats}...`)
 
@@ -173,9 +172,9 @@ export async function exportRecencyChats(
         .map(block => block.timestamp)
         .filter((date): date is Date => date != null)
         .map(date => date.toISOString())
-      if (blockDates.length > 0) {
-        const chatMinDate = blockDates[0]
-        const chatMaxDate = blockDates[blockDates.length - 1]
+      const chatMinDate = blockDates[0]
+      const chatMaxDate = blockDates.at(-1)
+      if (chatMinDate !== undefined && chatMaxDate !== undefined) {
         if (!existingCounts.minDate || chatMinDate < existingCounts.minDate) {
           existingCounts.minDate = chatMinDate
         }
@@ -201,9 +200,9 @@ export async function exportRecencyChats(
           .map(block => block.timestamp)
           .filter((date): date is Date => date != null)
           .map(date => date.toISOString())
-        if (blockDates.length > 0) {
-          const chatMinDate = blockDates[0]
-          const chatMaxDate = blockDates[blockDates.length - 1]
+        const chatMinDate = blockDates[0]
+        const chatMaxDate = blockDates.at(-1)
+        if (chatMinDate !== undefined && chatMaxDate !== undefined) {
           if (!minDate || chatMinDate < minDate) minDate = chatMinDate
           if (!maxDate || chatMaxDate > maxDate) maxDate = chatMaxDate
         }
@@ -218,9 +217,8 @@ export async function exportRecencyChats(
         recencyState.chats[chatId] = { lastMessageId, lastExportedAt: now }
       }
     } else {
-      const newestIncludedId = orderedMessages.length > 0
-        ? orderedMessages[orderedMessages.length - 1].id
-        : recencyState.chats[chatId]?.lastMessageId
+      const newestIncludedId = orderedMessages.at(-1)?.id
+        ?? recencyState.chats[chatId]?.lastMessageId
       if (newestIncludedId != null && newestIncludedId > 0) {
         nextRecencyChats[chatId] = { lastMessageId: newestIncludedId, lastExportedAt: now }
         recencyState.chats[chatId] = { lastMessageId: newestIncludedId, lastExportedAt: now }

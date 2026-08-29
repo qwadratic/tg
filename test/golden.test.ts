@@ -45,9 +45,9 @@ const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
  */
 function renderState(state: SyncState): string {
   const now = Date.now()
-  return JSON.stringify(state, (key, value) => {
+  return JSON.stringify(state, (key: string, value: unknown) => {
     if (key !== 'lastSyncedAt' && key !== 'lastExportedAt') return value
-    assert.match(String(value), ISO, `${key} is not an ISO instant: ${value}`)
+    assert.match(String(value), ISO, `${key} is not an ISO instant: ${String(value)}`)
     return now - Date.parse(String(value)) < 60_000 ? '<NOW>' : value
   }, 2)
 }
@@ -367,7 +367,7 @@ test('eval-85 archive files are 0600 and the archive dir is 0700', async () => {
     }
 
     // An APPEND must not widen it either: that is the path that runs daily.
-    await appendToChatFile(CHAT_NAME, CHAT_ID, CONVERSATION, [])
+    appendToChatFile(CHAT_NAME, CHAT_ID, CONVERSATION, [])
     for (const f of readdirSync(dir).filter((x) => x.endsWith('.md'))) {
       assert.equal(statSync(join(dir, f)).mode & 0o777, 0o600, `${f} widened on append`)
     }

@@ -118,6 +118,7 @@ test('sync updates state and appends to existing archive', async () => {
 
 test('error handlers include stack traces', () => {
   const originalError = console.error
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- stashed to restore the property, never called detached
   const originalExit = process.exit
   const errors: string[] = []
 
@@ -126,7 +127,7 @@ test('error handlers include stack traces', () => {
   }) as typeof console.error
   process.exit = ((code?: number) => {
     throw new Error(`exit:${code ?? 0}`)
-  }) as typeof process.exit
+  })
 
   try {
     const err = new Error('boom')

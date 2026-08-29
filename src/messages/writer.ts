@@ -48,10 +48,15 @@ export async function writeChatFile(
   const orderedMessages = sortMessagesChronological(messages)
   const filePath = getArchivePath(chatName, chatId)
 
-  const firstMsgId = orderedMessages[0].id
-  const lastMsgId = orderedMessages[orderedMessages.length - 1].id
-  const minDate = orderedMessages[0].date.toISOString()
-  const maxDate = orderedMessages[orderedMessages.length - 1].date.toISOString()
+  const firstMsg = orderedMessages[0]
+  const lastMsg = orderedMessages[orderedMessages.length - 1]
+  // Unreachable: the empty case returned above, so both ends exist.
+  if (!firstMsg || !lastMsg) throw new Error('sortMessagesChronological dropped every message')
+
+  const firstMsgId = firstMsg.id
+  const lastMsgId = lastMsg.id
+  const minDate = firstMsg.date.toISOString()
+  const maxDate = lastMsg.date.toISOString()
 
   let content = buildFrontmatter(
     chatName,

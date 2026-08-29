@@ -43,7 +43,7 @@ test('peer cache reports mtcute timestamps as real dates', async () => {
     assert.equal(stats.lastUpdated, new Date(updated).toISOString())
     // The actual bug: any scaling lands outside the range a clock can produce.
     assert.ok(
-      new Date(stats.lastUpdated!).getUTCFullYear() < 3000,
+      new Date(stats.lastUpdated).getUTCFullYear() < 3000,
       `peer cache timestamp is not a plausible date: ${stats.lastUpdated}`
     )
   })

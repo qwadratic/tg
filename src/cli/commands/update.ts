@@ -16,7 +16,7 @@ export function registerUpdateCommand(program: Command, currentVersion: string):
     .description('Check for a newer version of tg and install it')
     .option('--check', 'Report whether an update exists; install nothing')
     .option('--background-update-check', 'Internal: run silently as the detached checker', false)
-    .action(async (options) => {
+    .action(async (options: { check?: boolean; backgroundUpdateCheck: boolean }) => {
       const background = Boolean(options.backgroundUpdateCheck)
 
       await runCommand(async () => {

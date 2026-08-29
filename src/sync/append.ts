@@ -43,7 +43,7 @@ function updateFrontmatterAndAppend(
     throw new Error('Invalid file format: no frontmatter found')
   }
 
-  const frontmatter = match[1]
+  const frontmatter = match[1] ?? ''
   const body = existingContent.slice(match[0].length)
 
   const updatedFrontmatter = updateFrontmatter({
@@ -81,13 +81,18 @@ export function appendToChatFile(
 
   const filePath = getArchivePath(chatName, chatId)
 
+  const orderedMessages = sortMessagesChronological(messages)
+  const firstMsg = orderedMessages[0]
+  const lastMsg = orderedMessages.at(-1)
+  // Unreachable: the empty case returned above, so both ends exist.
+  if (!firstMsg || !lastMsg) return { messagesAppended: 0, fileCreated: false }
+
   // Create file if it doesn't exist to avoid data loss
   if (!existsSync(filePath)) {
-    const orderedMessages = sortMessagesChronological(messages)
-    const firstMsgId = orderedMessages[0].id
-    const lastMsgId = orderedMessages[orderedMessages.length - 1].id
-    const minDate = orderedMessages[0].date.toISOString()
-    const maxDate = orderedMessages[orderedMessages.length - 1].date.toISOString()
+    const firstMsgId = firstMsg.id
+    const lastMsgId = lastMsg.id
+    const minDate = firstMsg.date.toISOString()
+    const maxDate = lastMsg.date.toISOString()
 
     let content = buildFrontmatter(
       chatName,
@@ -110,8 +115,6 @@ export function appendToChatFile(
   // Read existing content
   const existingContent = readFileSync(filePath, 'utf-8')
 
-  const orderedMessages = sortMessagesChronological(messages)
-
   // Format new messages
   let newMessages = ''
   for (const msg of orderedMessages) {
@@ -119,9 +122,9 @@ export function appendToChatFile(
   }
 
   // Get the last message ID for frontmatter update
-  const newLastMsgId = orderedMessages[orderedMessages.length - 1].id
-  const newMinDate = orderedMessages[0].date.toISOString()
-  const newMaxDate = orderedMessages[orderedMessages.length - 1].date.toISOString()
+  const newLastMsgId = lastMsg.id
+  const newMinDate = firstMsg.date.toISOString()
+  const newMaxDate = lastMsg.date.toISOString()
 
   // Update frontmatter and append messages
   const updatedContent = updateFrontmatterAndAppend(

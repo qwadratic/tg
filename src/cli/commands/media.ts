@@ -41,7 +41,7 @@ export function registerMediaCommand(program: Command): void {
     .option('--scan <n>', 'Messages to scan while looking for matches', '200')
     .option('--since <date>', 'Ignore messages older than this')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string | undefined, options) => {
+    .action(async (peer: string | undefined, options: { to: string; kind?: string; max: string; scan: string; since?: string; json?: boolean }) => {
       await runCommand(async () => {
         // Everything checkable is checked before a session is opened, so a typo
         // costs nothing. The peer is validated here too, when given: only the

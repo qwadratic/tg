@@ -25,6 +25,17 @@ export interface PeerSummary {
   lastMessage: string
 }
 
+/**
+ * mtcute's dialog peer is untyped at this boundary, so read it defensively:
+ * only a primitive becomes text, anything else is treated as absent rather
+ * than stringified into "[object Object]".
+ */
+function asText(value: unknown): string | null {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value)
+  return null
+}
+
 /** Name fields differ by peer type; a user has firstName, a group has title. */
 function peerName(peer: Record<string, unknown>): string {
   const parts = [peer.firstName, peer.lastName].filter(Boolean).join(' ')
@@ -43,13 +54,13 @@ export function foldAccents(text: string): string {
 
 export interface ListPeersOptions {
   /** Cap on dialogs walked. Telegram pages these, so this bounds the request count. */
-  limit?: number
+  limit?: number | undefined
   /** Keep only this peer type. 'user' gives 1:1 chats and excludes groups. */
-  type?: string
+  type?: string | undefined
   /** Keep only chats whose last message is at or after this instant. */
-  since?: Date
+  since?: Date | undefined
   /** Drop bot chats. Bots dominate a dialog list and are rarely the target. */
-  excludeBots?: boolean
+  excludeBots?: boolean | undefined
 }
 
 /**
@@ -67,7 +78,7 @@ export async function listPeers(
 
   for await (const dialog of tg.iterDialogs({ limit: options.limit ?? 500 })) {
     const peer = dialog.peer as unknown as Record<string, unknown>
-    const type = String(peer.type ?? 'unknown')
+    const type = asText(peer.type) ?? 'unknown'
 
     if (options.type && type !== options.type) continue
     if (options.excludeBots && peer.isBot) continue
@@ -79,7 +90,7 @@ export async function listPeers(
       id: Number(peer.id),
       type,
       name: peerName(peer),
-      username: peer.username ? String(peer.username) : null,
+      username: asText(peer.username),
       bot: Boolean(peer.isBot),
       lastMessageAt: date ? date.toISOString().slice(0, 16) : null,
       lastMessage: (dialog.lastMessage?.text ?? '').replace(/\s+/g, ' ').slice(0, 80)

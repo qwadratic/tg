@@ -396,7 +396,7 @@ test('eval-114 sync loops once per --once, floors the interval, and holds one se
   const opens = [...source.matchAll(/withAuthenticatedClient\(/g)]
   assert.equal(opens.length, 1, 'sync must open exactly one session for the whole run')
   const loop = source.indexOf('while (true)')
-  assert.ok(loop > opens[0].index!, 'the polling loop must live inside the session')
+  assert.ok(loop > opens[0].index, 'the polling loop must live inside the session')
 
   // --once exits after exactly one pass: the break precedes the sleep.
   const breaksOnce = source.indexOf('if (opts.once) break')
@@ -409,7 +409,7 @@ test('eval-114 sync loops once per --once, floors the interval, and holds one se
 
   // Arguments are parsed before the lock is taken (eval-61's rule, for --chats).
   const parsesChats = source.indexOf('opts.chats\n')
-  assert.ok(parsesChats !== -1 && parsesChats < opens[0].index!, '--chats must be parsed before connecting')
+  assert.ok(parsesChats !== -1 && parsesChats < opens[0].index, '--chats must be parsed before connecting')
 
   // stdout is NDJSON only: no console.log anywhere on the sync path.
   for (const file of ['cli/commands/sync.ts', 'sync/index.ts']) {

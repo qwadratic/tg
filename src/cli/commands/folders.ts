@@ -34,7 +34,7 @@ export function registerFoldersCommand(program: Command): void {
     .command('list')
     .description('List synced folders, most recently updated first')
     .option('--json', 'Machine-readable output')
-    .action(async (options) => {
+    .action(async (options: { json?: boolean }) => {
       // No client needed: everything shown here is already on disk.
       await runCommand(async () => {
         const statuses = folderStatuses(loadState())
@@ -56,7 +56,7 @@ export function registerFoldersCommand(program: Command): void {
     .description('Re-export one folder, or every folder oldest-first')
     .option('--folder <id>', 'Folder id to update')
     .option('--all', 'Update every tracked folder, stalest first')
-    .action(async (options) => {
+    .action(async (options: { folder?: string; all?: boolean }) => {
       await runCommand(async () => {
         const statuses = folderStatuses(loadState())
         if (statuses.length === 0) {

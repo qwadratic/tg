@@ -70,7 +70,7 @@ export interface SentRecord {
  * send. Without it an agent or cron job is refused rather than trusted, because
  * sending is the one thing here that cannot be undone.
  */
-export function assertConfirmed(options: { yes?: boolean }): void {
+export function assertConfirmed(options: { yes?: boolean | undefined }): void {
   if (options.yes) return
   if (canPrompt()) return
 

@@ -37,11 +37,11 @@ export function registerSyncCommand(program: Command): void {
     )
     .option('--json', 'Machine-readable output: one JSON summary line per pass, to stdout')
     .action(async (opts: {
-      once?: boolean
+      once?: boolean | undefined
       interval: string
-      privateOnly?: boolean
-      chats?: string
-      json?: boolean
+      privateOnly?: boolean | undefined
+      chats?: string | undefined
+      json?: boolean | undefined
     }) => {
       await runCommand(async () => {
         const interval = Number.parseInt(opts.interval, 10)

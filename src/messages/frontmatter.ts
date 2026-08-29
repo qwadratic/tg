@@ -41,12 +41,18 @@ function yamlIdList(folders: FolderRef[]): string {
  * `folder_title` is the FIRST folder's title and is display only; routing
  * reads `folder_ids`, which carries every membership.
  */
+/** First folder's title, YAML-quoted, or the literal `null` when there is none. */
+function folderTitleValue(folders: FolderRef[]): string {
+  const first = folders[0]
+  return first ? yamlQuote(first.title) : 'null'
+}
+
 function gbrainFields(chatName: string, folders: FolderRef[]): string[] {
   return [
     `type: ${GBRAIN_PAGE_TYPE}`,
     `title: ${yamlQuote(chatName)}`,
     `folder_ids: ${yamlIdList(folders)}`,
-    `folder_title: ${folders.length > 0 ? yamlQuote(folders[0].title) : 'null'}`
+    `folder_title: ${folderTitleValue(folders)}`
   ]
 }
 
@@ -142,7 +148,9 @@ export function getFrontmatterValue(frontmatter: string, key: string): string | 
   const regex = new RegExp(`^${key}:\\s*(.+)$`, 'm')
   const match = frontmatter.match(regex)
   if (!match) return null
-  const rawValue = match[1].trim()
+  const captured = match[1]
+  if (captured === undefined) return null
+  const rawValue = captured.trim()
   if (rawValue === 'null') return null
   if (rawValue.startsWith('"') && rawValue.endsWith('"')) {
     // Inverse of yamlQuote: one pass, so `\\"` unescapes to `\` + `"` and not
@@ -183,7 +191,7 @@ function ensureGbrainFields(
     updated = upsertField(
       updated,
       'folder_title',
-      folders.length > 0 ? yamlQuote(folders[0].title) : 'null'
+      folderTitleValue(folders)
     )
   } else if (getFrontmatterValue(updated, 'folder_ids') === null) {
     updated = upsertField(updated, 'folder_ids', '[]')

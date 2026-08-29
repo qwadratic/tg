@@ -82,14 +82,16 @@ export async function selectFolders(folders: FolderInfo[], currentSelection?: nu
       label: `${f.title} (${f.chatCount} chats)`
     })),
     required: false,
-    initialValues: currentSelection
+    // Spread, not `initialValues: currentSelection`: clack declares the prop as
+    // optional-without-undefined, which exactOptionalPropertyTypes rejects.
+    ...(currentSelection === undefined ? {} : { initialValues: currentSelection })
   })
 
   if (isCancel(selected)) {
     process.exit(0)
   }
 
-  return selected as number[]
+  return selected
 }
 
 /**

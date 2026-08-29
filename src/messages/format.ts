@@ -19,14 +19,14 @@ export function formatSender(sender: User | Chat | PeerSender): string {
 
   // Handle users
   if ('firstName' in sender) {
-    const user = sender as User
+    const user = sender
     const name = user.lastName ? `${user.firstName} ${user.lastName}` : user.firstName
     return user.username ? `${name} (@${user.username})` : name
   }
 
   // Handle chats (channels, groups)
   if ('title' in sender) {
-    return (sender as Chat).title
+    return (sender).title
   }
 
   // Fallback for any other type with displayName

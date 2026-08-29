@@ -2,6 +2,7 @@
  * Characters invalid on Windows/Mac/Linux filesystems.
  * Includes: < > : " / \ | ? * and control characters (0x00-0x1f, 0x80-0x9f)
  */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
 const INVALID_CHARS = /[<>:"/\\|?*\x00-\x1f\x80-\x9f]/g
 
 /**
