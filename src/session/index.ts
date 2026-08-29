@@ -5,7 +5,15 @@ import { createClient } from '../client.js'
 import { acquireLock } from './lock.js'
 import { OperatorError } from '../errors.js'
 import { SESSION_DB_PATH } from './cache.js'
-import { getOrCreateDbKey, psstAvailable, readSecret, writeSecret, SECRETS } from './psst.js'
+import { deleteSecret, getOrCreateDbKey, psstAvailable, readSecret, writeSecret, SECRETS } from './psst.js'
+import {
+  isExpired,
+  metaForReuse,
+  readSessionMeta,
+  writeSessionMeta,
+  DEFAULT_SESSION_TTL_DAYS
+} from './ttl.js'
+import { SESSION_META_PATH } from '../paths.js'
 import { setting } from '../env.js'
 import { EXIT } from '../exit-codes.js'
 
@@ -33,17 +41,22 @@ export interface OpenSessionOptions {
    * Defaults to {@link canPrompt}, so unattended runs fail loudly instead of
    * hanging on a prompt nobody is there to answer.
    */
-  interactive?: boolean
+  interactive?: boolean | undefined
   /**
    * Discard the local cache and re-import from the vault. Use when deploying a
    * session that was created on another machine, or after rotating one.
    */
-  forceImport?: boolean
+  forceImport?: boolean | undefined
   /**
    * Log in by scanning a QR code instead of typing a phone number. Ignored
    * unless this run ends up needing an interactive login.
    */
-  qr?: boolean
+  qr?: boolean | undefined
+  /**
+   * How many days before this workspace's session self-expires. Persisted once
+   * set; omit to leave whatever this workspace already has (or the default).
+   */
+  ttlDays?: number | undefined
 }
 
 export interface SessionHandle {
@@ -88,6 +101,48 @@ export function resetLocalCache(path = SESSION_DB_PATH): void {
   for (const suffix of ['', '-wal', '-shm']) {
     rmSync(`${path}${suffix}`, { force: true })
   }
+}
+
+/** The local traces of a session, injectable so expiry is testable offline. */
+export interface ExpiryEffects {
+  resetCache: () => void
+  forgetSecret: () => void
+  removeMeta: () => void
+}
+
+const LOCAL_EXPIRY_EFFECTS: ExpiryEffects = {
+  resetCache: () => resetLocalCache(),
+  forgetSecret: () => deleteSecret(SECRETS.session),
+  removeMeta: () => rmSync(SESSION_META_PATH, { force: true })
+}
+
+/**
+ * End an expired session at Telegram, then locally - in that order.
+ *
+ * The order is the whole point, so it is a function rather than a comment: an
+ * unconfirmed server-side logout must never be forgotten locally, because
+ * dropping the session string here would leave a live authorisation at
+ * Telegram that this tool can no longer name or terminate.
+ */
+export async function expireSession(
+  logOut: () => Promise<void>,
+  effects: ExpiryEffects = LOCAL_EXPIRY_EFFECTS
+): Promise<void> {
+  try {
+    await logOut()
+  } catch (error) {
+    throw new OperatorError(
+      'This workspace\'s Telegram session is past its TTL, but Telegram could not\n' +
+      `  be reached to end it (${error instanceof Error ? error.message : String(error)}).\n` +
+      '  Nothing was deleted locally, so the session stays terminable. Retry.\n' +
+      '  Or end it by hand: Telegram > Settings > Devices.',
+      EXIT.upstream
+    )
+  }
+
+  effects.resetCache()
+  effects.forgetSecret()
+  effects.removeMeta()
 }
 
 /**
@@ -135,13 +190,38 @@ export async function openSession(options: OpenSessionOptions = {}): Promise<Ses
       let user = await checkSession(tg)
       let source: SessionSource = hadCache ? 'cache' : 'vault'
 
+      const now = new Date()
+      let meta = user ? readSessionMeta() : null
+
+      if (user && isExpired(meta, now)) {
+        // auth.logOut ends THIS auth key and nothing else. Never
+        // account.setAuthorizationTTL, which is an account-wide policy that
+        // would reach the operator's phone.
+        await expireSession(async () => {
+          await tg.logOut()
+        })
+        meta = null
+        user = null
+      }
+
       if (!user) {
         if (!interactive) throw noSessionError()
 
         user = options.qr ? await ensureAuthenticatedQr(tg) : await ensureAuthenticated(tg)
         writeSecret(SECRETS.session, await tg.exportSession())
+        writeSessionMeta({
+          createdAt: now.toISOString(),
+          ttlDays: options.ttlDays ?? DEFAULT_SESSION_TTL_DAYS
+        })
         source = 'login'
-      } else if (!vaultSession) {
+      } else {
+        // Reused session. Backfill a missing record rather than treating it as
+        // infinitely old, and rewrite the length only when one was asked for.
+        const next = metaForReuse(meta, options.ttlDays, now)
+        if (next) writeSessionMeta(next)
+      }
+
+      if (user && source !== 'login' && !vaultSession) {
         // Authorised from a local cache that predates the vault: capture it now
         // so this session becomes deployable too.
         writeSecret(SECRETS.session, await tg.exportSession())

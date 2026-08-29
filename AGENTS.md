@@ -173,7 +173,9 @@ they resolve against the current directory at the moment of the call. That is ho
   golden can pin the output. Keep formatting out of the code that fetches.
 - `--json` writes only the payload to stdout. Progress and warnings go to stderr.
 - Tests are `node:test` + `assert`, no framework: `pnpm test`.
-- Typecheck with `npx tsc --noEmit` before calling anything done.
+- Typecheck with `npx tsc --noEmit` and lint with `pnpm run lint` before calling
+  anything done. `any` is a lint error, not a style preference: prefer `unknown`
+  plus narrowing at an untyped third-party boundary.
 - The version lives as a literal in `src/index.ts` AND in `package.json`.
   eval-72 fails if they drift; change both or neither.
 

@@ -137,6 +137,26 @@ export function writeSecret(name: string, value: string): void {
 }
 
 /**
+ * Remove a secret from the local vault. Best effort, and deliberately so.
+ *
+ * The only caller has already ended the session server-side, so the value here
+ * is dead either way; failing the run because a vault write did not take would
+ * leave the operator with an error and nothing to do about it.
+ *
+ * The in-memory memo is cleared too, or a later readSecret() in this same
+ * process would hand back the credential that was just deleted.
+ */
+export function deleteSecret(name: string): void {
+  try {
+    execFileSync('psst', ['rm', name], { stdio: 'ignore' })
+  } catch {
+    // No vault, no such secret, no psst - all mean "it is not there", which is
+    // the outcome asked for.
+  }
+  cache.delete(name)
+}
+
+/**
  * Encryption key for the local peer cache, created on first use.
  *
  * A random key stored in the vault replaces the old interactive password

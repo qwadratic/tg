@@ -33,6 +33,14 @@ export const SESSION_DB_PATH = join(DATA_DIR, 'session.db')
 /** Single-instance lock. Workspace-relative, so it cannot see another workspace. */
 export const LOCK_PATH = join(DATA_DIR, 'session.lock')
 
+/**
+ * When THIS workspace's session was established, and how long it may live.
+ *
+ * Workspace-scoped like the session it describes, never stateDir(): a TTL that
+ * expired one workspace's auth key on behalf of another would be a footgun.
+ */
+export const SESSION_META_PATH = join(DATA_DIR, 'session-meta.json')
+
 /** Tracked folder and chat selection. */
 export const CONFIG_PATH = join(DATA_DIR, 'config.json')
 

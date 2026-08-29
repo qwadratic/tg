@@ -1,3 +1,5 @@
+import { hostname } from 'node:os'
+import { basename } from 'node:path'
 import { TelegramClient } from '@mtcute/node'
 import { BaseSqliteStorage, networkMiddlewares } from '@mtcute/core'
 import { EncryptedSqliteStorage } from './storage/encrypted.js'
@@ -11,6 +13,22 @@ const EXPECTED_RPC_ERRORS = new Set([
   'SESSION_REVOKED',
   'SESSION_EXPIRED'
 ])
+
+/**
+ * What Telegram's own "Active Sessions" list calls this workspace.
+ *
+ * mtcute defaults every client to "mtcute on Node.js/vX (Darwin arm64)", so a
+ * machine with five workspaces shows five identical rows and none of them can
+ * be safely terminated. Naming the directory and host makes each row match a
+ * place on disk.
+ *
+ * 48 chars is a GUESS, not a documented Telegram limit - no cap is published,
+ * and both an over-long string and a truncated one are risks, so pick a length
+ * that stays readable in the app's list.
+ */
+function workspaceDeviceLabel(): string {
+  return `tg: ${basename(process.cwd())} @ ${hostname()}`.slice(0, 48)
+}
 
 /**
  * @param cacheKey - encrypts data/session.db at rest. Supplied by the session
@@ -38,6 +56,10 @@ export function createClient(cacheKey: string): TelegramClient {
     apiHash,
     storage,
     disableUpdates: true,
+    // Spread last by mtcute's network manager, so this overrides its default
+    // deviceModel. Only deviceModel: systemVersion/appVersion/langCode are the
+    // library's to report.
+    initConnectionOptions: { deviceModel: workspaceDeviceLabel() },
     network: {
       // Use built-in middlewares with flood wait handling up to 60 seconds
       middlewares: [

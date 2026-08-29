@@ -82,6 +82,12 @@ API_ID=... API_HASH=... tg session login
 Only a human can create a session, because only a human receives the login code.
 If you are an agent and hit exit 3, stop and ask.
 
+A session **expires after 3 days** by default. Past that, the next run ends it at
+Telegram and needs a fresh `tg session login` — so exit 3 on a workspace that
+worked last week is normal, not a bug. `tg session status` shows
+`sessionExpiresAt`. A human sets a different length once with
+`tg session login --ttl-days <n>` (`0` disables); do not raise it yourself.
+
 ## User stories this supports
 
 **"Who did I talk to about X?"**

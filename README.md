@@ -112,6 +112,10 @@ as `TG_API_ID` / `TG_API_HASH`) and only has to do the phone-code step.
 `tg init` also chmods the data root to `0700` and adds it to `.gitignore`,
 because that directory holds a full account credential *and* real messages.
 
+Each workspace names itself in Telegram's own device list (Settings > Devices)
+as `tg: <directory> @ <host>`, so the rows are told apart - and terminated - by
+the folder they belong to, instead of five identical `mtcute on Node.js` lines.
+
 ## Reading
 
 | command | what it does |
@@ -255,12 +259,35 @@ cheapest-first:
 | --- | --- |
 | `session login [--force]` | manual auth flow; stores the session string in psst |
 | `session login --qr` | same, but scan a QR code from the Telegram app instead of typing a number |
-| `session status [--json]` | session, peer cache and lock state; connects to nothing |
+| `session login --ttl-days <n>` | days before this workspace's session self-expires (default 3; `0` disables) |
+| `session status [--json]` | session, peer cache, TTL and lock state; connects to nothing |
 | `session verify` | proves the peer cache survives across separate processes |
 | `session probe [--resolve n]` | one authenticated run, JSON report (used by `verify`) |
 
 `session status` prints a **fingerprint** of the session string, never the
-string, so you can tell two sessions apart without exposing either.
+string, so you can tell two sessions apart without exposing either. It also
+prints when this workspace's session was created and when it expires.
+
+### Sessions expire on their own
+
+Each workspace's session lives **3 days by default**. Once it is past that, the
+next run ends that one session server-side (`auth.logOut`, this auth key only -
+never anything account-wide), forgets it locally, and falls into the ordinary
+"please log in" flow at a terminal, or the usual no-session error unattended.
+
+```sh
+tg session login --ttl-days 30   # persisted for this workspace
+TG_SESSION_TTL_DAYS=0 tg ...     # off for this run; no auto-expiry
+```
+
+`TG_SESSION_TTL_DAYS` overrides the stored value, and `0` or a negative number
+switches expiry off entirely. Changing the length never restarts the clock, and
+a workspace that logged in before this shipped is backfilled rather than
+expired - the clock starts at the upgrade, not retroactively.
+
+If Telegram cannot be reached to end an expired session, nothing is deleted
+locally (exit 6, retry): a session forgotten here but still live at Telegram is
+one this tool can no longer name or terminate.
 
 `TG_SESSION_DB_KEY` encrypts `data/session.db` at rest and is generated per
 workspace on first use. It is not worth copying: the cache it protects is
@@ -349,6 +376,7 @@ If that trade is not one you want, `TG_NO_UPDATE=1` leaves you in full control.
 pnpm install
 pnpm test              # node:test, no network, no framework
 pnpm run typecheck
+pnpm run lint          # eslint, type-checked rules; `any` is an error
 pnpm run build
 ```
 

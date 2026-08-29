@@ -8,6 +8,8 @@ import { peerCacheStats, SESSION_DB_PATH } from '../../session/cache.js'
 import { getOrCreateDbKey, readSecret, SECRETS } from '../../session/psst.js'
 import { LOCK_PATH } from '../../session/lock.js'
 import { loadConfig } from '../../config/index.js'
+import { parseTtlDays } from './auth.js'
+import { effectiveTtlDays, readSessionMeta } from '../../session/ttl.js'
 import { OperatorError } from '../../errors.js'
 import { runCommand, handlePlainError } from '../errors.js'
 import { EXIT } from '../../exit-codes.js'
@@ -40,8 +42,12 @@ function fingerprint(value: string): string {
  * the peer cache outlives one client rather than one object in memory.
  */
 function respawn(args: string[]): string {
+  const entry = process.argv[1]
+  if (entry === undefined) {
+    throw new Error('cannot respawn: process.argv[1] is missing')
+  }
   try {
-    return execFileSync(process.execPath, [...process.execArgv, process.argv[1], ...args], {
+    return execFileSync(process.execPath, [...process.execArgv, entry, ...args], {
       encoding: 'utf-8',
       // stderr inherited so the child's own diagnosis reaches the user directly.
       stdio: ['ignore', 'pipe', 'inherit']
@@ -72,11 +78,19 @@ export function registerSessionCommand(program: Command): void {
     .description('Authenticate by hand and store the session string in psst')
     .option('--force', 'Discard the local cache and log in again')
     .option('--qr', 'Log in by scanning a QR code instead of typing a phone number, like linking a desktop device')
-    .action(async (options) => {
+    .option('--ttl-days <n>', "Days before this workspace's session auto-expires (default 3; 0 disables)")
+    .action(async (options: { force?: boolean; qr?: boolean; ttlDays?: string }) => {
       await runCommand(async () => {
+        const ttlDays = parseTtlDays(options.ttlDays)
+
         if (options.force) resetLocalCache()
 
-        const handle = await openSession({ interactive: true, forceImport: options.force, qr: options.qr })
+        const handle = await openSession({
+          interactive: true,
+          forceImport: options.force,
+          qr: options.qr,
+          ttlDays
+        })
         try {
           const label = `${handle.user.firstName} ${handle.user.lastName ?? ''}`.trim()
           console.log(chalk.green(`\nLogged in as ${label} (@${handle.user.username ?? 'no username'})`))
@@ -98,7 +112,7 @@ export function registerSessionCommand(program: Command): void {
     .option('--forget <phone>', 'Remove one number, or "all"')
     .option('--reveal', 'Print numbers in full (requires a terminal)')
     .option('--json', 'Machine-readable output')
-    .action(async (options) => {
+    .action(async (options: { forget?: string; reveal?: boolean; json?: boolean }) => {
       await runCommand(async () => {
         if (options.forget) {
           const removed = forgetPhone(options.forget)
@@ -163,13 +177,22 @@ export function registerSessionCommand(program: Command): void {
     .command('status')
     .description('Show session, peer cache and lock state without connecting')
     .option('--json', 'Machine-readable output')
-    .action(async (options) => {
+    .action(async (options: { json?: boolean }) => {
       await runCommand(async () => {
         const vaultSession = readSecret(SECRETS.session)
         const cacheKey = readSecret(SECRETS.dbKey)
         const peers = cacheKey ? peerCacheStats(cacheKey) : { count: 0, lastUpdated: null }
         const config = loadConfig()
         const lockPid = existsSync(LOCK_PATH) ? readFileSync(LOCK_PATH, 'utf-8').trim() : null
+
+        // No meta yet means this workspace has not logged in since TTLs shipped;
+        // the next run backfills it rather than expiring anything.
+        const meta = readSessionMeta()
+        const ttlDays = meta ? effectiveTtlDays(meta) : null
+        const expiresAt =
+          meta && ttlDays !== null && ttlDays > 0
+            ? new Date(Date.parse(meta.createdAt) + ttlDays * 86_400_000).toISOString()
+            : null
 
         const report = {
           vaultSession: vaultSession ? fingerprint(vaultSession) : null,
@@ -180,7 +203,10 @@ export function registerSessionCommand(program: Command): void {
           peersLastUpdated: peers.lastUpdated,
           trackedFolders: config.trackedFolderIds.length,
           trackedChats: config.trackedChatIds.length,
-          lockedByPid: lockPid
+          lockedByPid: lockPid,
+          sessionCreatedAt: meta?.createdAt ?? null,
+          sessionTtlDays: ttlDays,
+          sessionExpiresAt: expiresAt
         }
 
         if (options.json) {
@@ -193,6 +219,17 @@ export function registerSessionCommand(program: Command): void {
         console.log(`  vault session      ${report.vaultSession ? chalk.green(report.vaultSession) : chalk.red('absent')}`)
         console.log(`  cache key in vault ${yes(report.cacheKeyPresent)}`)
         console.log(`  api credentials    ${yes(report.apiCredentials)}`)
+        console.log(`  session created    ${report.sessionCreatedAt ?? chalk.dim('unrecorded (set on next run)')}`)
+        console.log(
+          `  session ttl        ${
+            report.sessionTtlDays === null
+              ? chalk.dim('unset (default 3 days)')
+              : report.sessionTtlDays <= 0
+                ? chalk.yellow('disabled (no auto-expiry)')
+                : `${report.sessionTtlDays} day${report.sessionTtlDays === 1 ? '' : 's'}`
+          }`
+        )
+        console.log(`  session expires    ${report.sessionExpiresAt ?? chalk.dim('never')}`)
         console.log(chalk.cyan('Local cache'))
         console.log(`  file               ${report.localCache ?? chalk.dim('none')}`)
         console.log(`  cached peers       ${report.peers}`)
@@ -208,7 +245,7 @@ export function registerSessionCommand(program: Command): void {
     .command('probe')
     .description('One authenticated run that reports peer cache counts as JSON')
     .option('--resolve <n>', 'How many tracked chats to resolve', '5')
-    .action(async (options) => {
+    .action(async (options: { resolve: string }) => {
       // handlePlainError: stdout must stay parseable JSON for `session verify`.
       await runCommand(async () => {
         const limit = Number.parseInt(options.resolve, 10)
@@ -258,11 +295,11 @@ export function registerSessionCommand(program: Command): void {
         // it in turn, which also demonstrates the lock does not deadlock a
         // sequence of runs.
         console.log(chalk.dim('run 1: connecting and resolving peers...'))
-        const first: ProbeReport = JSON.parse(respawn(['session', 'probe']).trim())
+        const first = JSON.parse(respawn(['session', 'probe']).trim()) as ProbeReport
         console.log(`  peers ${first.peersBefore} -> ${first.peersAfter} (resolved ${first.resolved})`)
 
         console.log(chalk.dim('run 2: fresh process, reading cache before connecting...'))
-        const second: ProbeReport = JSON.parse(respawn(['session', 'probe']).trim())
+        const second = JSON.parse(respawn(['session', 'probe']).trim()) as ProbeReport
         console.log(`  peers ${second.peersBefore} -> ${second.peersAfter} (source: ${second.source})`)
 
         const checks: [string, boolean, string][] = [
