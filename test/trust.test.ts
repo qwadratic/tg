@@ -61,7 +61,8 @@ function importClosure(entries: string[]): Set<string> {
     }
 
     for (const match of source.matchAll(/from\s+'([^']+)'/g)) {
-      const spec = match[1]
+      // Group 1 is not optional in the pattern: a match always carries it.
+      const spec = match[1]!
       if (!spec.startsWith('.')) continue
       queue.push(resolve(dirname(file), spec.replace(/\.js$/, '.ts')))
     }
@@ -84,7 +85,25 @@ const WRITE_RPCS = [
   // unnamed.
   'forwardMessagesById',
   'editMessage',
-  'readHistory'
+  'readHistory',
+  // Chat-state verbs (D13b). Private to the account owner, fenced anyway: the
+  // property that makes src/send/ reviewable is "every write RPC is here".
+  'archiveChats',
+  'unarchiveChats',
+  'markChatUnread'
+] as const
+
+/**
+ * Raw TL method names, reached through the generic `tg.call({_: '...'})`.
+ *
+ * mtcute has no high-level wrapper for dialog pinning or notify settings, so
+ * pin/unpin and mute/unmute are written as object literals. A regex looking for
+ * a JS call name like `toggleDialogPin(` would find NOTHING and fence nothing -
+ * hence this second list, matched as string literals.
+ */
+const WRITE_TL_METHODS = [
+  'messages.toggleDialogPin',
+  'account.updateNotifySettings'
 ] as const
 
 /**
@@ -102,6 +121,11 @@ const WRITE_ALLOWLIST = new Set([
   'contacts/import.ts'
 ])
 
+/** The raw TL method name as a string literal, in any of the three quote styles. */
+function tlMethodLiteral(method: string): RegExp {
+  return new RegExp(`['"\`]${method.replace(/\./g, '\\.')}['"\`]`)
+}
+
 test('eval-29 write RPCs appear only in the files fenced to allow them', () => {
   const offenders: string[] = []
 
@@ -116,6 +140,14 @@ test('eval-29 write RPCs appear only in the files fenced to allow them', () => {
         offenders.push(`${relative} calls ${rpc}`)
       }
     }
+    for (const method of WRITE_TL_METHODS) {
+      // `_: 'messages.toggleDialogPin'` - the raw-call escape hatch. Any quote
+      // style: nothing in eslint.config.js pins quotes, so a double-quoted
+      // literal is a legal way to walk straight past a single-quote check.
+      if (tlMethodLiteral(method).test(source)) {
+        offenders.push(`${relative} calls the raw RPC ${method}`)
+      }
+    }
   }
 
   assert.deepEqual(
@@ -124,6 +156,22 @@ test('eval-29 write RPCs appear only in the files fenced to allow them', () => {
     'a write RPC appeared outside the fence. Either route it through src/send/, ' +
     'or add the file to WRITE_ALLOWLIST with the reason it is safe.'
   )
+})
+
+test('eval-29b the raw TL write methods are named in exactly one file', () => {
+  // The positive half of eval-29: a fence that matches nothing passes for the
+  // wrong reason. Each raw method must actually appear, and only in send/.
+  for (const method of WRITE_TL_METHODS) {
+    const naming = sourceFiles()
+      .filter((file) => tlMethodLiteral(method).test(readFileSync(file, 'utf-8')))
+      .map((file) => file.slice(SRC.length))
+
+    assert.deepEqual(
+      naming,
+      ['send/index.ts'],
+      `${method} must be called from src/send/index.ts and nowhere else`
+    )
+  }
 })
 
 test('eval-30 the unattended paths cannot reach the send module', () => {
@@ -219,7 +267,7 @@ test('eval-65 the send commands resolve a peer before calling the send module', 
     'send.ts must resolve a reference to an identity before sending'
   )
   assert.ok(
-    !/(sendText|sendMedia|deleteMessages|forwardMessage|editMessageText|markRead)\(tg,\s*peer\b/.test(source),
+    !/(sendText|sendMedia|deleteMessages|forwardMessage|editMessageText|markRead|markUnread|archiveChat|unarchiveChat|pinChat|unpinChat|muteChat|unmuteChat)\(tg,\s*peer\b/.test(source),
     'send.ts must never pass the raw typed reference to a send function'
   )
   // Every send path shows the resolved identity, or takes --yes on the record.
@@ -361,10 +409,12 @@ test('eval-97 the send gate is cheap, and refuses before a session is opened', (
   )
 
   const actions = [...source.matchAll(/\.action\(async \([^)]*\) => \{([\s\S]*?)\n {6}\}\)/g)]
-    .map((m) => m[1])
+    // Group 1 is not optional in the pattern: a match always carries it.
+    .map((m) => m[1]!)
     .filter((body) => body.includes('withAuthenticatedClient'))
 
-  assert.ok(actions.length >= 6, `expected the write actions, found ${actions.length}`)
+  // 7 message verbs + the 7 chat-state verbs of D13b.
+  assert.ok(actions.length >= 14, `expected the write actions, found ${actions.length}`)
 
   for (const body of actions) {
     const gate = body.indexOf('assertConfirmed')
@@ -415,10 +465,16 @@ test('eval-100 every write verb accepts --json', () => {
     'utf-8'
   )
 
-  const verbs = [...source.matchAll(/\.command\('((?:text|media|note|rm|forward|edit|read)[^']*)'\)([\s\S]*?)\.action\(/g)]
-  assert.equal(verbs.length, 7, `expected 7 write verbs, found ${verbs.length}`)
+  // 7 message verbs + the 7 chat-state verbs of D13b.
+  const verbs = [...source.matchAll(
+    /\.command\('((?:text|media|note|rm|forward|edit|read|unarchive|archive|unpin|pin|unmute|mute|unread)[^']*)'\)([\s\S]*?)\.action\(/g
+  )]
+  assert.equal(verbs.length, 14, `expected 14 write verbs, found ${verbs.length}`)
 
-  for (const [, name, options] of verbs) {
+  for (const verb of verbs) {
+    // Both groups are mandatory in the pattern: a match always carries them.
+    const name = verb[1]!
+    const options = verb[2]!
     assert.match(options, /option\('--json'/, `tg send ${name} does not accept --json`)
   }
 })

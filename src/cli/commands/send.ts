@@ -2,13 +2,20 @@ import { confirm, isCancel } from '@clack/prompts'
 import chalk from 'chalk'
 import type { Command } from 'commander'
 import {
+  archiveChat,
   deleteMessages,
   editMessageText,
   forwardMessage,
   markRead,
+  markUnread,
+  muteChat,
+  pinChat,
   sendMedia,
   sendNote,
   sendText,
+  unarchiveChat,
+  unmuteChat,
+  unpinChat,
   type SentRecord
 } from '../../send/index.js'
 import {
@@ -52,7 +59,10 @@ async function confirmRecipient(
 ): Promise<boolean> {
   if (yes || !canPrompt()) return true
 
-  console.log(chalk.yellow(`\nAbout to send ${what} to ${chalk.bold(describePeer(target))}`))
+  // `what` is the whole action phrase, not just a noun: the chat-state verbs
+  // send nothing, so "About to send ..." would be false for half of them.
+  console.log(chalk.yellow(`\nAbout to ${what}`))
+  console.log(chalk.yellow(`  chat: ${chalk.bold(describePeer(target))}`))
 
   // Typing an id and typing a handle carry different risks, so say which one
   // this was: a handle was resolved by Telegram, an id was taken at face value.
@@ -62,9 +72,11 @@ async function confirmRecipient(
     )
   }
 
-  const ok = await confirm({ message: 'Send it?' })
+  const ok = await confirm({ message: 'Go ahead?' })
   if (isCancel(ok) || !ok) {
-    console.log('Cancelled. Nothing was sent.')
+    // Half these verbs send nothing, so "nothing was sent" would be the same
+    // false reassurance this wording was fixed to stop giving.
+    console.log('Cancelled. Nothing was done.')
     return false
   }
   return true
@@ -80,8 +92,21 @@ function report(record: SentRecord, json = false): void {
     logSummary(`deleted ${record.size} message(s) in ${record.peerId}`)
     return
   }
-  if (record.kind === 'read') {
-    logSummary(`marked ${record.peerId} as read`)
+  // The chat-state verbs change nothing on anyone else's screen, so "sent" would
+  // be a lie. Each gets its own plain-English past tense.
+  const stateWording: Partial<Record<SentRecord['kind'], string>> = {
+    read: 'marked as read',
+    archive: 'archived',
+    unarchive: 'unarchived',
+    pin: 'pinned',
+    unpin: 'unpinned',
+    mute: 'muted',
+    unmute: 'unmuted',
+    unread: 'marked unread'
+  }
+  const wording = stateWording[record.kind]
+  if (wording) {
+    logSummary(`${wording} ${record.peerId}`)
     return
   }
   logSummary(`sent ${record.kind} to ${record.peerId} as message ${record.messageId}`)
@@ -107,7 +132,7 @@ export function registerSendCommand(program: Command): void {
         assertConfirmed(options)
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
-          if (!(await confirmRecipient(target, 'a text message', Boolean(options.yes)))) return
+          if (!(await confirmRecipient(target, 'send a text message', Boolean(options.yes)))) return
           report(await sendText(tg, target.id, text, { yes: options.yes }), Boolean(options.json))
         })
       })
@@ -126,7 +151,7 @@ export function registerSendCommand(program: Command): void {
         assertConfirmed(options)
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
-          if (!(await confirmRecipient(target, `the file ${file}`, Boolean(options.yes)))) return
+          if (!(await confirmRecipient(target, `send the file ${file}`, Boolean(options.yes)))) return
           report(
             await sendMedia(tg, target.id, file, {
               caption: options.caption,
@@ -160,7 +185,7 @@ export function registerSendCommand(program: Command): void {
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
           // Deleting is irreversible and ids are per-chat, so name the chat.
-          const what = `a delete of ${messageIds.length} message(s) (${messageIds.join(', ')})`
+          const what = `delete ${messageIds.length} message(s) (${messageIds.join(', ')})`
           if (!(await confirmRecipient(target, what, Boolean(options.yes)))) return
           report(
             await deleteMessages(tg, target.id, messageIds, { yes: options.yes }),
@@ -202,7 +227,7 @@ export function registerSendCommand(program: Command): void {
           const target = await resolvePeerRef(tg, options.to)
           // The confirmation names the destination - that is who gains a copy.
           const what =
-            `a forward of ${messageIds.length} message(s) (${messageIds.join(', ')}) ` +
+            `forward ${messageIds.length} message(s) (${messageIds.join(', ')}) ` +
             `from ${describePeer(source)}`
           if (!(await confirmRecipient(target, what, Boolean(options.yes)))) return
           report(
@@ -230,7 +255,7 @@ export function registerSendCommand(program: Command): void {
 
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
-          const what = `an edit to message ${messageId}`
+          const what = `edit message ${messageId}`
           if (!(await confirmRecipient(target, what, Boolean(options.yes)))) return
           report(
             await editMessageText(tg, target.id, messageId, text, { yes: options.yes }),
@@ -251,8 +276,134 @@ export function registerSendCommand(program: Command): void {
         assertConfirmed(options)
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
-          if (!(await confirmRecipient(target, 'a read receipt', Boolean(options.yes)))) return
+          if (!(await confirmRecipient(target, 'send a read receipt', Boolean(options.yes)))) return
           report(await markRead(tg, target.id, { yes: options.yes }), Boolean(options.json))
+        })
+      })
+    })
+
+  /**
+   * The chat-state verbs (D13b). Private to the account owner: unlike every
+   * verb above, none of these is ever visible to the other side of the chat.
+   * Written out one by one rather than looped, because the structural evals in
+   * test/trust.test.ts read this file as text.
+   */
+
+  send
+    .command('archive <peer>')
+    .description('Move a chat into the archive (id, @username or t.me link)')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, options: SendFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          if (!(await confirmRecipient(target, 'archive this chat', Boolean(options.yes)))) return
+          report(await archiveChat(tg, target.id, { yes: options.yes }), Boolean(options.json))
+        })
+      })
+    })
+
+  send
+    .command('unarchive <peer>')
+    .description('Move a chat out of the archive (id, @username or t.me link)')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, options: SendFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          if (!(await confirmRecipient(target, 'unarchive this chat', Boolean(options.yes)))) return
+          report(await unarchiveChat(tg, target.id, { yes: options.yes }), Boolean(options.json))
+        })
+      })
+    })
+
+  send
+    .command('pin <peer>')
+    .description('Pin a chat to the top of the list (id, @username or t.me link)')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, options: SendFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          if (!(await confirmRecipient(target, 'pin this chat', Boolean(options.yes)))) return
+          report(await pinChat(tg, target.id, { yes: options.yes }), Boolean(options.json))
+        })
+      })
+    })
+
+  send
+    .command('unpin <peer>')
+    .description('Unpin a chat (id, @username or t.me link)')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, options: SendFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          if (!(await confirmRecipient(target, 'unpin this chat', Boolean(options.yes)))) return
+          report(await unpinChat(tg, target.id, { yes: options.yes }), Boolean(options.json))
+        })
+      })
+    })
+
+  send
+    .command('mute <peer>')
+    .description('Mute a chat indefinitely (id, @username or t.me link)')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, options: SendFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          if (!(await confirmRecipient(target, 'mute this chat', Boolean(options.yes)))) return
+          report(await muteChat(tg, target.id, { yes: options.yes }), Boolean(options.json))
+        })
+      })
+    })
+
+  send
+    .command('unmute <peer>')
+    .description('Unmute a chat (id, @username or t.me link)')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, options: SendFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          if (!(await confirmRecipient(target, 'unmute this chat', Boolean(options.yes)))) return
+          report(await unmuteChat(tg, target.id, { yes: options.yes }), Boolean(options.json))
+        })
+      })
+    })
+
+  send
+    .command('unread <peer>')
+    .description('Mark a chat as unread (id, @username or t.me link)')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, options: SendFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          if (!(await confirmRecipient(target, 'mark this chat unread', Boolean(options.yes)))) return
+          report(await markUnread(tg, target.id, { yes: options.yes }), Boolean(options.json))
         })
       })
     })

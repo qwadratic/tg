@@ -218,6 +218,10 @@ hard to fire by accident.
 | `send forward <peer> <ids...> --to <target>` | forward messages into another chat |
 | `send edit <peer> <id> <text>` | edit the text of a message you sent |
 | `send read <peer>` | mark a chat as read |
+| `send archive <peer>` / `send unarchive <peer>` | move a chat in or out of the archive |
+| `send pin <peer>` / `send unpin <peer>` | pin or unpin a chat |
+| `send mute <peer>` / `send unmute <peer>` | mute a chat indefinitely, or unmute it |
+| `send unread <peer>` | mark a chat as unread |
 | `note <text>` | send to your own Saved Messages |
 | `send log [--json]` | what this workspace has sent |
 

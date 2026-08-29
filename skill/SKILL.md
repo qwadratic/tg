@@ -139,6 +139,13 @@ tg send rm <peer> <id>      # delete a message you sent, for everyone
 tg send forward <peer> <id> --to <target>
 tg send edit <peer> <id> "new text"
 tg send read <peer>         # mark a chat as read
+tg send unread <peer>       # mark it unread again
+tg send archive <peer>      # move to the archive folder
+tg send unarchive <peer>    # move it back
+tg send pin <peer>          # pin the chat in the list
+tg send unpin <peer>        # unpin it
+tg send mute <peer>         # silence notifications for the chat
+tg send unmute <peer>       # unsilence it
 tg note "remember this"     # to your own Saved Messages
 tg send log                 # what this workspace has already sent
 ```

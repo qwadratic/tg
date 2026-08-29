@@ -17,8 +17,10 @@ import { assertConfirmed, guardedSend, type SentRecord } from './gate.js'
  *    deleteMessages/editMessage/readHistory call sites in src/."
  *
  * The fenced verb set is: `tg send text`, `tg send media`, `tg send rm`,
- * `tg send forward`, `tg send edit`, `tg send read`, `tg note` and the
- * read-only `tg send log`. Widening it again means a decision file, per
+ * `tg send forward`, `tg send edit`, `tg send read`, the seven chat-state verbs
+ * (`archive`, `unarchive`, `pin`, `unpin`, `mute`, `unmute`, `unread`),
+ * `tg note` and the read-only `tg send log`. Widening it again means a decision
+ * file, per
  * backlog/decisions/2026-08-17-narrow-the-no-write-back-rule-and-build-the-missing-gates.md
  * and its 2026-08-19 amendment.
  *
@@ -251,6 +253,164 @@ export async function markRead(
   const peer = await tg.resolvePeer(peerId)
   return guardedSend(peerId, 'read', 0, async () => {
     await tg.readHistory(peer)
+    return { id: 0 }
+  })
+}
+
+/**
+ * Chat-state verbs: private to the account owner, gated anyway.
+ *
+ * Unlike every write above, none of the seven below is visible to a
+ * counterparty. Archiving, pinning, muting and marking unread change only the
+ * owner's own chat list; nothing crosses to the other side of the chat, and
+ * there is no receipt like the one {@link markRead} produces. They are fenced
+ * regardless, because the property that makes this module reviewable is "every
+ * write RPC is here", not "every dangerous one is".
+ *
+ * They log `messageId: 0` and `size: 0` - the same sentinel {@link markRead}
+ * already uses, for the same reason: no message is involved.
+ *
+ * `pin`/`unpin` and `mute`/`unmute` go through the raw `tg.call()` API because
+ * mtcute ships no high-level wrapper for dialog pinning or notify settings.
+ * That is why the trust fence also scans for the TL method-name string
+ * literals; a regex looking for a JS call name would fence nothing.
+ */
+
+/** Move a chat into the archive. */
+export async function archiveChat(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  options: SendTextOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  return guardedSend(peerId, 'archive', 0, async () => {
+    await tg.archiveChats(peerId)
+    return { id: 0 }
+  })
+}
+
+/** Move a chat back out of the archive. */
+export async function unarchiveChat(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  options: SendTextOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  return guardedSend(peerId, 'unarchive', 0, async () => {
+    await tg.unarchiveChats(peerId)
+    return { id: 0 }
+  })
+}
+
+/** Mark a chat unread, so it reappears as needing attention. */
+export async function markUnread(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  options: SendTextOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  return guardedSend(peerId, 'unread', 0, async () => {
+    await tg.markChatUnread(peerId)
+    return { id: 0 }
+  })
+}
+
+/** Pin or unpin a chat to the top of the dialog list. Raw RPC: no wrapper. */
+async function toggleDialogPin(
+  tg: TelegramClient,
+  peerId: number,
+  pinned: boolean
+): Promise<void> {
+  const peer = await tg.resolvePeer(peerId)
+  await tg.call({
+    _: 'messages.toggleDialogPin',
+    pinned,
+    peer: { _: 'inputDialogPeer', peer }
+  })
+}
+
+/** Pin a chat to the top of the dialog list. */
+export async function pinChat(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  options: SendTextOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  return guardedSend(peerId, 'pin', 0, async () => {
+    await toggleDialogPin(tg, peerId, true)
+    return { id: 0 }
+  })
+}
+
+/** Unpin a chat. */
+export async function unpinChat(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  options: SendTextOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  return guardedSend(peerId, 'unpin', 0, async () => {
+    await toggleDialogPin(tg, peerId, false)
+    return { id: 0 }
+  })
+}
+
+/**
+ * Telegram's own "mute indefinitely" convention: the largest int32 unix
+ * timestamp. Not a sentinel we invented - the apps write exactly this.
+ */
+const MUTE_FOREVER = 2147483647
+
+/** Set a chat's mute-until watermark. Raw RPC: no wrapper. */
+async function setMuteUntil(
+  tg: TelegramClient,
+  peerId: number,
+  muteUntil: number
+): Promise<void> {
+  const peer = await tg.resolvePeer(peerId)
+  await tg.call({
+    _: 'account.updateNotifySettings',
+    peer: { _: 'inputNotifyPeer', peer },
+    settings: { _: 'inputPeerNotifySettings', muteUntil }
+  })
+}
+
+/** Mute a chat indefinitely. */
+export async function muteChat(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  options: SendTextOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  return guardedSend(peerId, 'mute', 0, async () => {
+    await setMuteUntil(tg, peerId, MUTE_FOREVER)
+    return { id: 0 }
+  })
+}
+
+/** Unmute a chat. */
+export async function unmuteChat(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  options: SendTextOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  return guardedSend(peerId, 'unmute', 0, async () => {
+    await setMuteUntil(tg, peerId, 0)
     return { id: 0 }
   })
 }

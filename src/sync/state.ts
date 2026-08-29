@@ -111,7 +111,7 @@ export function updateFolderState(
   state: SyncState,
   folderId: number,
   chatIds: number[],
-  title?: string | undefined
+  title?: string
 ): void {
   state.folders[folderId] = {
     chatIds,

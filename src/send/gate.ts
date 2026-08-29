@@ -38,18 +38,21 @@ export interface SentRecord {
    * the destination would make `tg send log` unable to answer that.
    */
   fromPeerId?: number
-  kind: 'text' | 'photo' | 'video' | 'document' | 'delete' | 'forward' | 'edit' | 'read'
+  kind:
+    | 'text' | 'photo' | 'video' | 'document' | 'delete' | 'forward' | 'edit' | 'read'
+    // Chat state, private to the account owner: no counterparty ever sees these.
+    | 'archive' | 'unarchive' | 'pin' | 'unpin' | 'mute' | 'unmute' | 'unread'
   /**
    * Message id on success, null on failure. For a delete, the first id removed;
    * for a forward, the first message created in the destination chat; for an
-   * edit, the message edited; for a read, always 0 - there is no message id to
-   * report.
+   * edit, the message edited; for a read or any chat-state verb, always 0 -
+   * there is no message id to report.
    */
   messageId: number | null
   /**
    * Characters for text, bytes for media, message count for a delete or a
-   * forward, characters for an edit, and always 0 for a read - it carries no
-   * content.
+   * forward, characters for an edit, and always 0 for a read or a chat-state
+   * verb - they carry no content.
    */
   size: number
   /**
