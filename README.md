@@ -113,8 +113,9 @@ as `TG_API_ID` / `TG_API_HASH`) and only has to do the phone-code step.
 because that directory holds a full account credential *and* real messages.
 
 Each workspace names itself in Telegram's own device list (Settings > Devices)
-as `tg: <directory> @ <host>`, so the rows are told apart - and terminated - by
-the folder they belong to, instead of five identical `mtcute on Node.js` lines.
+as `<date>/<directory>` - session creation date, then the folder it lives in -
+so the rows are told apart, and terminated, instead of five identical
+`mtcute on Node.js` lines.
 
 ## Reading
 

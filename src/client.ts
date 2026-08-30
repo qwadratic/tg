@@ -1,10 +1,10 @@
-import { hostname } from 'node:os'
 import { basename } from 'node:path'
 import { TelegramClient } from '@mtcute/node'
 import { BaseSqliteStorage, networkMiddlewares } from '@mtcute/core'
 import { EncryptedSqliteStorage } from './storage/encrypted.js'
 import { SESSION_DB_PATH } from './session/cache.js'
 import { readSecret, SECRETS } from './session/psst.js'
+import { readSessionMeta } from './session/ttl.js'
 
 /** Errors the session layer handles itself; logging them would be noise. */
 const EXPECTED_RPC_ERRORS = new Set([
@@ -18,16 +18,27 @@ const EXPECTED_RPC_ERRORS = new Set([
  * What Telegram's own "Active Sessions" list calls this workspace.
  *
  * mtcute defaults every client to "mtcute on Node.js/vX (Darwin arm64)", so a
- * machine with five workspaces shows five identical rows and none of them can
- * be safely terminated. Naming the directory and host makes each row match a
- * place on disk.
+ * machine with several workspaces shows several identical rows and none of
+ * them can be safely terminated. `<date>/<directory>` replaces that: no
+ * "mtcute", no "Node.js", just when this workspace's session was created and
+ * where it lives on disk - matching `tg session status`'s own fields, and
+ * stable across every future connection because it reads the same
+ * session-meta.json the TTL feature already writes.
+ *
+ * The date is the session's actual createdAt once one exists. Before that -
+ * the first connection of a fresh login, before openSession() has written
+ * session-meta.json - it falls back to today, which is what createdAt is
+ * about to become moments later anyway.
  *
  * 48 chars is a GUESS, not a documented Telegram limit - no cap is published,
  * and both an over-long string and a truncated one are risks, so pick a length
  * that stays readable in the app's list.
  */
-function workspaceDeviceLabel(): string {
-  return `tg: ${basename(process.cwd())} @ ${hostname()}`.slice(0, 48)
+// Exported for test/device-label.test.ts - not used outside this file otherwise.
+export function workspaceDeviceLabel(): string {
+  const meta = readSessionMeta()
+  const date = (meta?.createdAt ?? new Date().toISOString()).slice(0, 10)
+  return `${date}/${basename(process.cwd())}`.slice(0, 48)
 }
 
 /**
