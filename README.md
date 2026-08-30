@@ -113,9 +113,12 @@ as `TG_API_ID` / `TG_API_HASH`) and only has to do the phone-code step.
 because that directory holds a full account credential *and* real messages.
 
 Each workspace names itself in Telegram's own device list (Settings > Devices)
-as `<date>/<directory>` - session creation date, then the folder it lives in -
-so the rows are told apart, and terminated, instead of five identical
-`mtcute on Node.js` lines.
+as `<date>/<directory>@<host>` - session creation date, the folder it lives in,
+the machine - so the rows are told apart, and terminated, instead of five
+identical `mtcute on Node.js` lines. The host can be renamed to something more
+recognisable than a raw hostname: create `~/.tg/hosts.json` (or
+`$TG_STATE_DIR/hosts.json`) with `{ "<raw hostname>": "<alias>" }`. It's a
+hand-edited, per-machine file, never part of a workspace, never committed.
 
 ## Reading
 

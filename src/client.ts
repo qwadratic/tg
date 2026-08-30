@@ -5,6 +5,7 @@ import { EncryptedSqliteStorage } from './storage/encrypted.js'
 import { SESSION_DB_PATH } from './session/cache.js'
 import { readSecret, SECRETS } from './session/psst.js'
 import { readSessionMeta } from './session/ttl.js'
+import { friendlyHostname } from './hosts.js'
 
 /** Errors the session layer handles itself; logging them would be noise. */
 const EXPECTED_RPC_ERRORS = new Set([
@@ -19,16 +20,21 @@ const EXPECTED_RPC_ERRORS = new Set([
  *
  * mtcute defaults every client to "mtcute on Node.js/vX (Darwin arm64)", so a
  * machine with several workspaces shows several identical rows and none of
- * them can be safely terminated. `<date>/<directory>` replaces that: no
- * "mtcute", no "Node.js", just when this workspace's session was created and
- * where it lives on disk - matching `tg session status`'s own fields, and
- * stable across every future connection because it reads the same
+ * them can be safely terminated. `<date>/<directory>@<host>` replaces that: no
+ * "mtcute", no "Node.js" - when this workspace's session was created, where it
+ * lives on disk, and which machine, matching `tg session status`'s own fields
+ * and stable across every future connection because the date reads the same
  * session-meta.json the TTL feature already writes.
  *
  * The date is the session's actual createdAt once one exists. Before that -
  * the first connection of a fresh login, before openSession() has written
  * session-meta.json - it falls back to today, which is what createdAt is
  * about to become moments later anyway.
+ *
+ * The host goes through friendlyHostname() (src/hosts.ts): a raw hostname
+ * like "MacBookPro.home" is only meaningful to whoever configured that
+ * machine, so a hand-edited, per-user, uncommitted alias file can rename it to
+ * whatever tells one machine apart from another at a glance.
  *
  * 48 chars is a GUESS, not a documented Telegram limit - no cap is published,
  * and both an over-long string and a truncated one are risks, so pick a length
@@ -38,7 +44,7 @@ const EXPECTED_RPC_ERRORS = new Set([
 export function workspaceDeviceLabel(): string {
   const meta = readSessionMeta()
   const date = (meta?.createdAt ?? new Date().toISOString()).slice(0, 10)
-  return `${date}/${basename(process.cwd())}`.slice(0, 48)
+  return `${date}/${basename(process.cwd())}@${friendlyHostname()}`.slice(0, 48)
 }
 
 /**
