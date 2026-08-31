@@ -115,13 +115,17 @@ tg watch --minutes 30                 # wait for something about to be sent
 
 **"Keep an archive of my chats."**
 ```sh
-tg setup                    # pick which Telegram folders to track
-tg export chats             # incremental; safe to re-run
-tg sync --once --json       # one pass, one JSON summary line
+tg sync chats --once --json   # one incremental pass, one JSON summary line
+tg sync chats --once --verbose
 tg folders list --json
 ```
-Use `--once`. Plain `tg sync` loops on an interval until Ctrl+C and will hang
-the process that called it.
+Which folders and chats are tracked is a plain file, `data/config.json`:
+`{ "trackedFolderIds": [], "trackedChatIds": [], "excludeChatIds": [], "privateOnly": false }`.
+Write it directly; there is no wizard and no TTY involved.
+
+Use `--once`. Plain `tg sync chats` loops on an interval until Ctrl+C and will
+hang the process that called it. Bare `tg sync` just prints help - pick
+`chats`, `recent` or `historical`.
 
 
 **"Make my Telegram searchable."**

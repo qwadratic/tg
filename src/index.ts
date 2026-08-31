@@ -7,11 +7,7 @@ import { Command } from 'commander'
 import { registerAuthCommand } from './cli/commands/auth.js'
 import { registerSessionCommand } from './cli/commands/session.js'
 import { registerFoldersCommand } from './cli/commands/folders.js'
-import { registerSetupCommand } from './cli/commands/setup.js'
 import { registerInitCommand } from './cli/commands/init.js'
-import { registerExportSyncCommand } from './cli/commands/export-sync.js'
-import { registerExportRecentCommand } from './cli/commands/export-recent.js'
-import { registerExportHistoricalCommand } from './cli/commands/export-historical.js'
 import { registerCheckPhonesCommand } from './cli/commands/check-phones.js'
 import { registerSyncCommand } from './cli/commands/sync.js'
 import { registerShipCommand } from './cli/commands/ship.js'
@@ -25,7 +21,7 @@ import { registerDoctorCommand } from './cli/commands/doctor.js'
 import { scheduleUpdateCheck } from './update/index.js'
 import { EXIT } from './exit-codes.js'
 
-const VERSION = '0.5.0'
+const VERSION = '0.6.0'
 
 const program = new Command()
   .name('tg')
@@ -36,7 +32,6 @@ registerInitCommand(program)
 registerDoctorCommand(program)
 registerAuthCommand(program)
 registerSessionCommand(program)
-registerSetupCommand(program)
 registerFoldersCommand(program)
 
 // Read verbs: discovery, transcripts, media, waiting for media.
@@ -45,18 +40,7 @@ registerDumpCommand(program)
 registerMediaCommand(program)
 registerWatchCommand(program)
 
-const exportCommand = program
-  .command('export')
-  .description('Export chats from tracked folders')
-  .action(() => {
-    exportCommand.help()
-  })
-
-registerExportSyncCommand(exportCommand)
-registerExportRecentCommand(exportCommand)
-registerExportHistoricalCommand(exportCommand)
-
-// A sibling of export, not a subcommand: it is meant to be typed on its own.
+// Archiving: `sync chats`, `sync recent`, `sync historical`.
 registerSyncCommand(program)
 
 registerCheckPhonesCommand(program)

@@ -581,3 +581,24 @@ test('loadConfig reads tracked ids', async () => {
     assert.deepEqual(config.trackedChatIds, [10, 20, 30])
   })
 })
+
+test('eval-130 a malformed config is refused instead of silently ignored', async () => {
+  await withTempDir(async () => {
+    mkdirSync('data', { recursive: true })
+    const configPath = join('data', 'config.json')
+
+    // A missing list defaults to empty; the rest of the file survives.
+    writeFileSync(configPath, JSON.stringify({ trackedFolderIds: [2], excludeChatIds: [111] }))
+    const partial = loadConfig()
+    assert.deepEqual(partial.trackedFolderIds, [2])
+    assert.deepEqual(partial.trackedChatIds, [])
+    assert.deepEqual(partial.excludeChatIds, [111])
+
+    // Quoted ids would disable the exclusion. That must fail loudly.
+    writeFileSync(configPath, JSON.stringify({ trackedChatIds: [111], excludeChatIds: ['111'] }))
+    assert.throws(() => loadConfig(), /excludeChatIds/)
+
+    writeFileSync(configPath, JSON.stringify({ privateOnly: 'yes' }))
+    assert.throws(() => loadConfig(), /privateOnly/)
+  })
+})

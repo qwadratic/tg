@@ -16,7 +16,6 @@ export async function runRecencyExport(options: {
   await withAuthenticatedClient(
     async (tg) => {
       const config = await resolveExportConfig(tg)
-      if (!config) return
 
       const result = await exportRecencyChats(
         tg,

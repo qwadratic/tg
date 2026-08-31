@@ -4,10 +4,10 @@ import { parseCutoffDate } from '../args.js'
 import { runCommand } from '../errors.js'
 import { runRecencyExport } from './recency-export.js'
 
-export function registerExportHistoricalCommand(exportCommand: Command): void {
-  exportCommand
+export function registerSyncHistoricalCommand(syncCommand: Command): void {
+  syncCommand
     .command('historical')
-    .description('Export historical messages across all chats to data/archive/historical.md')
+    .description('Export historical messages across all tracked chats to data/archive/historical.md')
     .option('--cutoff <value>', 'Cutoff date (YYYY-MM-DD or shortcut), exclusive')
     .action(async (options: { cutoff?: string }) => {
       await runCommand(async () => {

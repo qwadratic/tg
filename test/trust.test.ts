@@ -177,12 +177,12 @@ test('eval-29b the raw TL write methods are named in exactly one file', () => {
 test('eval-30 the unattended paths cannot reach the send module', () => {
   // Everything a cron job, timer or agent invokes without a human present.
   const unattended = [
-    'cli/commands/export-sync.ts',
-    'cli/commands/export-recent.ts',
-    'cli/commands/export-historical.ts',
+    'cli/commands/sync.ts',
+    'cli/commands/sync-chats.ts',
+    'cli/commands/sync-recent.ts',
+    'cli/commands/sync-historical.ts',
     'cli/commands/folders.ts',
     'cli/commands/ship.ts',
-    'cli/commands/sync.ts',
     'sync/index.ts',
     'ship/index.ts'
   ]

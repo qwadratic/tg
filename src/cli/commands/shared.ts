@@ -1,10 +1,10 @@
-import { confirm, isCancel } from '@clack/prompts'
 import type { TelegramClient } from '@mtcute/node'
 import { withSession, type OpenSessionOptions } from '../../session/index.js'
-import { refreshTrackedChats, syncFolderConfig } from '../../folders/index.js'
+import { refreshTrackedChats } from '../../folders/index.js'
 import { loadConfig } from '../../config/index.js'
 import chalk from 'chalk'
-import { logWarning } from '../log.js'
+import { OperatorError } from '../../errors.js'
+import { EXIT } from '../../exit-codes.js'
 import { describePeer, resolvePeerRef } from '../../peers/ref.js'
 
 /**
@@ -70,27 +70,33 @@ export async function resolveTarget(
   return target.id
 }
 
+/**
+ * The tracked-chat config a sync verb should act on.
+ *
+ * No wizard: config is a plain file an agent or a script can write with no TTY
+ * anywhere in the loop. An unconfigured workspace is an operator error, not a
+ * prompt.
+ */
 export async function resolveExportConfig(tg: TelegramClient) {
-  let config = loadConfig()
-  if (config.trackedFolderIds.length === 0) {
-    const shouldSelect = await confirm({
-      message: 'No folders selected. Run setup to choose folders for export?'
-    })
-    if (isCancel(shouldSelect) || !shouldSelect) {
-      logWarning('No folders selected. Export cancelled.', { stderr: true })
-      return null
-    }
-    await syncFolderConfig(tg, true)
-    config = loadConfig()
+  const config = loadConfig()
+  // A chats-only config is valid: folders are a convenience for filling
+  // trackedChatIds, not a requirement.
+  if (config.trackedFolderIds.length === 0 && config.trackedChatIds.length === 0) {
+    throw new OperatorError(
+      'No folders or chats configured. Populate data/config.json directly - see README ' +
+      '"Configuration" for the shape (trackedFolderIds, trackedChatIds, excludeChatIds, privateOnly).',
+      EXIT.notConfigured
+    )
   }
 
   const refreshed = await refreshTrackedChats(tg, config)
   const totalChats = refreshed.config.trackedChatIds.length
   if (totalChats === 0) {
-    logWarning('No chats found in selected folders. Run "tg setup --select" to update selection.', {
-      stderr: true
-    })
-    return null
+    throw new OperatorError(
+      'No chats found in the tracked folders. Edit data/config.json directly - see README ' +
+      '"Configuration" for the shape (trackedFolderIds, trackedChatIds, excludeChatIds, privateOnly).',
+      EXIT.notConfigured
+    )
   }
 
   return refreshed.config

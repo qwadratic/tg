@@ -238,7 +238,7 @@ export function unroutableError(skipped: UnroutableFile[]): ShipError {
   if (firstNoFolder) {
     lines.push(
       `  ${byReason['no-folder'].length} in no tracked folder, e.g. ${basename(firstNoFolder.file)}`,
-      '    Track the folder they live in (tg setup), or pass --skip-unroutable.'
+      '    Track the folder they live in (data/config.json), or pass --skip-unroutable.'
     )
   }
   if (byReason['unmapped-folder'].length > 0) {

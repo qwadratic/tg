@@ -339,8 +339,8 @@ test('eval-96 the shipped agent skill stays in step with the CLI', () => {
   assert.ok(skill.includes(pkg.name), 'the skill must name the package it documents')
 
   // The real command tree, read from the files that build it. Top-level verbs
-  // are the ones hung off `program`; the export subcommands take a parameter
-  // named `exportCommand`, which is what keeps them out of this set.
+  // are the ones hung off `program`; the sync subcommands take a parameter
+  // named `syncCommand`, which is what keeps them out of this set.
   const sources = [
     readFileSync(join(root, 'src', 'index.ts'), 'utf-8'),
     ...readdirSync(join(root, 'src', 'cli', 'commands'))
@@ -389,7 +389,7 @@ test('eval-114 sync loops once per --once, floors the interval, and holds one se
   // its three behavioural claims are pinned statically: one pass under --once,
   // a 30s floor on --interval, and a single session for the whole run.
   const source = readFileSync(
-    fileURLToPath(new URL('../src/cli/commands/sync.ts', import.meta.url)),
+    fileURLToPath(new URL('../src/cli/commands/sync-chats.ts', import.meta.url)),
     'utf-8'
   )
 
@@ -414,7 +414,7 @@ test('eval-114 sync loops once per --once, floors the interval, and holds one se
   assert.ok(parsesChats !== -1 && parsesChats < opens[0]!.index, '--chats must be parsed before connecting')
 
   // stdout is NDJSON only: no console.log anywhere on the sync path.
-  for (const file of ['cli/commands/sync.ts', 'sync/index.ts']) {
+  for (const file of ['cli/commands/sync-chats.ts', 'sync/index.ts']) {
     const text = readFileSync(fileURLToPath(new URL(`../src/${file}`, import.meta.url)), 'utf-8')
     assert.ok(!/console\.log\(/.test(text), `${file} writes to stdout; --json output must stay parseable`)
   }

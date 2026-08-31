@@ -19,7 +19,7 @@ EnvironmentFile=-/etc/tg.env
 # exit. Step 1 holds a full Telegram account credential and never calls
 # gbrain; step 2 talks to gbrain and never sees a Telegram credential. The
 # separation is a process boundary, not a coding convention.
-ExecStart=/usr/local/bin/tg export chats
+ExecStart=/usr/local/bin/tg sync chats --once --verbose
 ExecStart=/usr/local/bin/tg ship
 
 NoNewPrivileges=true

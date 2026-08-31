@@ -5,6 +5,7 @@ import { spinner } from '@clack/prompts'
 import type { Config } from '../config/index.js'
 import { getChatName } from '../utils/chat-name.js'
 import { loadState, saveState } from '../sync/state.js'
+import { selectChatIds } from '../sync/chat-ids.js'
 import { fetchMessages } from './fetch.js'
 import { formatMessage } from './format.js'
 import { buildRecencyFrontmatter } from './frontmatter.js'
@@ -72,7 +73,8 @@ export async function exportRecencyChats(
     throw new Error(`Cutoff must not move earlier than ${previousCutoff}.`)
   }
 
-  const chatIdArray = [...new Set(config.trackedChatIds)]
+  // Honours excludeChatIds and the persisted privateOnly default.
+  const chatIdArray = selectChatIds(config)
   const totalChats = chatIdArray.length
 
   let chatsProcessed = 0

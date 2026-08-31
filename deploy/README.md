@@ -4,7 +4,7 @@ Two systemd units. One timer, one oneshot service, two processes in sequence.
 
 | file | what it is |
 |---|---|
-| `tg.service` | `tg export chats` then `tg ship`, `Type=oneshot`, aborts on the first failure |
+| `tg.service` | `tg sync chats --once --verbose` then `tg ship`, `Type=oneshot`, aborts on the first failure |
 | `tg.timer` | `OnCalendar=*-*-* 04:17:00`, `Persistent=true` |
 
 `install.sh` is **deferred**, not forgotten. It is the only non-trivial artefact
@@ -41,7 +41,7 @@ headless unlock turns out not to work on Linux — that is why the line reads
 
 `ExecStart` runs twice, in order, as two processes:
 
-1. `tg export chats` holds a full Telegram account credential and never calls
+1. `tg sync chats --once --verbose` holds a full Telegram account credential and never calls
    gbrain or an LLM.
 2. `tg ship` talks to gbrain and holds no Telegram credential. It is a
    subcommand of the same binary for the human's convenience, but a separate

@@ -1,7 +1,6 @@
 import { TelegramClient, tl } from '@mtcute/node'
 import { getMarkedPeerId } from '@mtcute/core'
-import { multiselect, isCancel } from '@clack/prompts'
-import { loadConfig, saveConfig, Config } from '../config/index.js'
+import { saveConfig, Config } from '../config/index.js'
 import { loadState, saveState, updateFolderState } from '../sync/state.js'
 
 /**
@@ -67,31 +66,6 @@ export function getChatIdsFromFolder(folder: EnumerableFolder): number[] {
   }
 
   return chatIds
-}
-
-/**
- * Interactive folder selection using multiselect prompt.
- * Returns array of selected folder IDs.
- * @param currentSelection - Optional array of folder IDs to pre-select
- */
-export async function selectFolders(folders: FolderInfo[], currentSelection?: number[]): Promise<number[]> {
-  const selected = await multiselect({
-    message: 'Select folders to export:',
-    options: folders.map(f => ({
-      value: f.id,
-      label: `${f.title} (${f.chatCount} chats)`
-    })),
-    required: false,
-    // Spread, not `initialValues: currentSelection`: clack declares the prop as
-    // optional-without-undefined, which exactOptionalPropertyTypes rejects.
-    ...(currentSelection === undefined ? {} : { initialValues: currentSelection })
-  })
-
-  if (isCancel(selected)) {
-    process.exit(0)
-  }
-
-  return selected
 }
 
 /**
@@ -200,6 +174,12 @@ export async function refreshTrackedChats(
   tg: TelegramClient,
   config: Config
 ): Promise<{ updated: boolean; config: Config }> {
+  // No folders tracked means trackedChatIds is the hand-written source of
+  // truth. Deriving from zero folders would delete it.
+  if (config.trackedFolderIds.length === 0) {
+    return { updated: false, config }
+  }
+
   const { folderIds, chatIds, folders } = await buildTrackedChatIds(tg, config.trackedFolderIds)
   const { added, removed } = diffChatLists(config.trackedChatIds, chatIds)
   const chatsChanged = !haveSameChatIds(config.trackedChatIds, chatIds)
@@ -237,48 +217,4 @@ export async function refreshTrackedChats(
   }
 
   return { updated: chatsChanged, config }
-}
-
-/**
- * Main orchestration function for the setup command.
- * Handles first-run selection and subsequent refresh.
- * @param forceSelect - If true, show folder selection even if already configured
- */
-export async function syncFolderConfig(tg: TelegramClient, forceSelect = false): Promise<void> {
-  // Get folder info for display
-  const folders = await listFolders(tg)
-
-  if (folders.length === 0) {
-    console.log('No folders found in your Telegram account.')
-    return
-  }
-
-  // Load existing config
-  const config = loadConfig()
-  const isFirstRun = config.trackedFolderIds.length === 0
-
-  // Determine which folders to track
-  let trackedFolderIds: number[]
-
-  if (isFirstRun || forceSelect) {
-    // First run or forced re-selection: show selection prompt
-    console.log(`Found ${folders.length} folder(s):`)
-    trackedFolderIds = await selectFolders(folders, config.trackedFolderIds)
-  } else {
-    // Subsequent run: use existing tracked folders
-    trackedFolderIds = config.trackedFolderIds
-    console.log(`Refreshing chat list from ${trackedFolderIds.length} selected folder(s)...`)
-  }
-
-  const { folderIds, chatIds, folders: membership } = await buildTrackedChatIds(tg, trackedFolderIds)
-
-  recordFolderMembership(membership)
-
-  config.trackedFolderIds = folderIds
-  config.trackedChatIds = chatIds
-
-  // Save updated config
-  saveConfig(config)
-
-  console.log(`Tracking ${folderIds.length} folders with ${chatIds.length} total chats`)
 }

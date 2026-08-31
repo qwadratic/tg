@@ -172,16 +172,17 @@ read or texted.
 The archive path is the original job: whole folders of chats into one Markdown
 file each, incrementally, shaped for a knowledge base.
 
-- `export chats [--private-only] [--chats <ids>]` — export tracked folders, or
-  just the listed chat ids
-- `sync [--once] [--interval <seconds>] [--private-only] [--chats <ids>]` — run
-  `export chats` again and again on an interval until you stop it, so an archive
-  stays current without a cron entry. It polls; there is no push stream.
-- `export recent --cutoff <value>` — combined recent export (cutoff required, inclusive)
-- `export historical [--cutoff <value>]` — combined historical export (cutoff optional, exclusive)
+- `sync chats [--once] [--interval <seconds>] [--private-only] [--chats <ids>] [--json] [--verbose]`
+  — archive the tracked chats into one Markdown file each, incrementally.
+  Repeats on an interval until you stop it, so an archive stays current without
+  a cron entry; `--once` does a single pass and exits. It polls; there is no
+  push stream. `--verbose` adds the new-chat and skipped-chat counts to the
+  summary (and to the `--json` line), which the repeating default keeps quiet
+  about on purpose.
+- `sync recent --cutoff <value>` — combined recent export (cutoff required, inclusive)
+- `sync historical [--cutoff <value>]` — combined historical export (cutoff optional, exclusive)
 - `folders list [--json]` — folders already synced, most recently updated first
 - `folders update [--folder <id> | --all]` — re-export one folder, or every folder stalest-first
-- `setup` — pick which folders to track
 - `ship [--dry-run] [--all] [--skip-unroutable]` — push new archive files into
   [gbrain](https://github.com/garrytan/gstack), an optional external knowledge
   base. **Skip this command if you do not use gbrain**; nothing else depends on it.
@@ -192,9 +193,40 @@ file each, incrementally, shaped for a knowledge base.
   unroutable chat does not block the whole archive.
 
 ```sh
-tg sync                  # every 5 minutes until Ctrl+C
-tg sync --once --json    # one pass, one JSON summary line
+tg sync chats                  # every 5 minutes until Ctrl+C
+tg sync chats --once --json    # one pass, one JSON summary line
 ```
+
+Bare `tg sync` prints help rather than picking a subcommand for you: `chats`,
+`recent` and `historical` write different files and cost very different amounts
+of time.
+
+### Configuration
+
+What gets archived is `data/config.json`, a plain hand-edited file. There is no
+wizard and no CLI for it: a script or an agent can write it directly, with no
+TTY anywhere in the loop.
+
+```json
+{
+  "trackedFolderIds": [2, 5],
+  "trackedChatIds": [904417238, -1003831472718],
+  "excludeChatIds": [-1002222222222],
+  "privateOnly": false
+}
+```
+
+| field | meaning |
+| --- | --- |
+| `trackedFolderIds` | Telegram folder ids to archive. `tg folders list` shows the ones already known |
+| `trackedChatIds` | the chats to archive. Overwritten from the tracked folders on every sync run — hand-added ids survive only when `trackedFolderIds` is empty, which is the supported chats-only setup |
+| `excludeChatIds` | optional. Always skipped, folder membership notwithstanding |
+| `privateOnly` | optional. Persisted default for `--private-only`, applied by `sync chats`, `sync recent` and `sync historical`; the `sync chats` flag still wins for a single run |
+
+Any field may be absent - a missing list reads as empty, and an older config
+with only the first two keys loads unchanged. A field of the wrong type is
+refused at load with exit 4 rather than ignored: quoted ids (`["111"]`) would
+silently disable an exclusion, which is a privacy failure, not a typo.
 
 Recency exports are incremental and rely on `data/archive/sync-state.json` for
 per-chat watermarks. Cutoffs are interpreted in your local timezone at the start

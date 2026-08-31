@@ -7,6 +7,7 @@ import { appendToChatFile } from './append.js'
 import { fetchMessages } from '../messages/fetch.js'
 import { writeChatFile } from '../messages/writer.js'
 import { foldersForChat } from '../folders/status.js'
+import { selectChatIds } from './chat-ids.js'
 import type { FolderRef } from '../messages/frontmatter.js'
 
 /**
@@ -17,7 +18,6 @@ export interface SyncResult {
   messagesAppended: number
   filesUpdated: number
   newChatsAdded: number
-  newFoldersAdded: number
   chatsSkipped: number
   durationMs: number
 }
@@ -127,10 +127,7 @@ function printSyncSummary(skippedChats: string[], newChatLabels: string[]) {
  * @param config - Configuration with tracked chats
  * @returns Sync statistics
  */
-export function isPrivateChat(chatId: number): boolean {
-  // Telegram convention: users get positive ids, groups and channels negative.
-  return chatId > 0
-}
+export { isPrivateChat } from './chat-ids.js'
 
 export async function syncChats(
   tg: TelegramClient,
@@ -141,12 +138,10 @@ export async function syncChats(
   const state = loadState()
   const isFirstSync = Object.keys(state.chats).length === 0
 
-  // Use tracked chat IDs from config for every run
-  const chatsToSync = options.privateOnly
-    ? config.trackedChatIds.filter(isPrivateChat)
-    : config.trackedChatIds
+  // Tracked chats, minus excludeChatIds, minus non-private chats when either
+  // --private-only or config.privateOnly says so. Already deduplicated.
+  const chatsToSync = selectChatIds(config, options)
   const newChatsAdded = chatsToSync.filter(id => !state.chats[id]).length
-  const newFoldersAdded = 0
 
   // Step 4: Sync each chat
   const s = spinner({ output: process.stderr })
@@ -159,10 +154,7 @@ export async function syncChats(
   const skippedChats: string[] = []
   const newChatLabels: string[] = []
 
-  // Deduplicate chat IDs
-  const uniqueChatIds = [...new Set(chatsToSync)]
-
-  for (const chatId of uniqueChatIds) {
+  for (const chatId of chatsToSync) {
     // ponytail: one unreachable peer used to abort the whole run (left folder, deleted
     // account, blocked). Skip it and keep going; the watermark for that chat is simply
     // not advanced, so a later run retries it. Ceiling: a chat that fails EVERY run stays
@@ -224,7 +216,6 @@ export async function syncChats(
     messagesAppended,
     filesUpdated,
     newChatsAdded,
-    newFoldersAdded,
     chatsSkipped,
     durationMs: Date.now() - startTime
   }

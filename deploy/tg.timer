@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily tg export + gbrain ship
+Description=Daily tg sync + gbrain ship
 
 [Timer]
 # Odd minute per the house cron-stagger rule: nothing else on the host wakes

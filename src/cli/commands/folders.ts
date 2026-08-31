@@ -3,6 +3,7 @@ import chalk from 'chalk'
 import type { Command } from 'commander'
 import { folderStatuses, relativeTime, type FolderStatus } from '../../folders/status.js'
 import { loadState } from '../../sync/state.js'
+import { loadConfig } from '../../config/index.js'
 import { syncChats } from '../../sync/index.js'
 import { canPrompt } from '../../session/index.js'
 import { runCommand } from '../errors.js'
@@ -44,7 +45,7 @@ export function registerFoldersCommand(program: Command): void {
           return
         }
         if (statuses.length === 0) {
-          logWarning('No folders tracked yet. Run "tg setup" to select some.')
+          logWarning('No folders tracked yet. Add folder ids to data/config.json (trackedFolderIds).')
           return
         }
         renderTable(statuses, Date.now())
@@ -60,7 +61,7 @@ export function registerFoldersCommand(program: Command): void {
       await runCommand(async () => {
         const statuses = folderStatuses(loadState())
         if (statuses.length === 0) {
-          logWarning('No folders tracked yet. Run "tg setup" first.')
+          logWarning('No folders tracked yet. Add folder ids to data/config.json (trackedFolderIds).')
           return
         }
 
@@ -73,8 +74,11 @@ export function registerFoldersCommand(program: Command): void {
 
             // Narrow the config to this folder: syncChats already does correct
             // incremental fetching, it just needs a smaller chat list.
+            // excludeChatIds/privateOnly carry over: selectChatIds is the only
+            // gate, so a chat excluded in config must stay excluded here too.
             const chatIds = loadState().folders[folder.id]?.chatIds ?? []
             const result = await syncChats(tg, {
+              ...loadConfig(),
               trackedFolderIds: [folder.id],
               trackedChatIds: chatIds
             })
