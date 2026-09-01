@@ -288,7 +288,7 @@ export async function archiveChat(
   return guardedSend(peerId, 'archive', 0, async () => {
     await tg.archiveChats(peerId)
     return { id: 0 }
-  })
+  }, { units: 0 })
 }
 
 /** Move a chat back out of the archive. */
@@ -303,7 +303,7 @@ export async function unarchiveChat(
   return guardedSend(peerId, 'unarchive', 0, async () => {
     await tg.unarchiveChats(peerId)
     return { id: 0 }
-  })
+  }, { units: 0 })
 }
 
 /** Mark a chat unread, so it reappears as needing attention. */
@@ -318,7 +318,7 @@ export async function markUnread(
   return guardedSend(peerId, 'unread', 0, async () => {
     await tg.markChatUnread(peerId)
     return { id: 0 }
-  })
+  }, { units: 0 })
 }
 
 /** Pin or unpin a chat to the top of the dialog list. Raw RPC: no wrapper. */
@@ -347,7 +347,7 @@ export async function pinChat(
   return guardedSend(peerId, 'pin', 0, async () => {
     await toggleDialogPin(tg, peerId, true)
     return { id: 0 }
-  })
+  }, { units: 0 })
 }
 
 /** Unpin a chat. */
@@ -362,7 +362,7 @@ export async function unpinChat(
   return guardedSend(peerId, 'unpin', 0, async () => {
     await toggleDialogPin(tg, peerId, false)
     return { id: 0 }
-  })
+  }, { units: 0 })
 }
 
 /**
@@ -397,7 +397,7 @@ export async function muteChat(
   return guardedSend(peerId, 'mute', 0, async () => {
     await setMuteUntil(tg, peerId, MUTE_FOREVER)
     return { id: 0 }
-  })
+  }, { units: 0 })
 }
 
 /** Unmute a chat. */
@@ -412,7 +412,7 @@ export async function unmuteChat(
   return guardedSend(peerId, 'unmute', 0, async () => {
     await setMuteUntil(tg, peerId, 0)
     return { id: 0 }
-  })
+  }, { units: 0 })
 }
 
 /**

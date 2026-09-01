@@ -1,9 +1,10 @@
 ---
 id: TASK-39
 title: Chat-state verbs should not spend the outbound message budget
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-29 21:52'
+updated_date: '2026-09-01 05:56'
 labels: []
 dependencies: []
 ordinal: 39000
@@ -25,3 +26,9 @@ Acceptance: 6 archives in one unattended run succeed; a 6th send text in the sam
 - [ ] #2 text/media/forward/edit caps unchanged
 - [ ] #3 send log still records every chat-state action
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Fixed: archiveChat/unarchiveChat/pinChat/unpinChat/muteChat/unmuteChat/markUnread now pass {units:0} to guardedSend explicitly (guardedSend's 3rd positional arg is size, not units - they set size:0 but never passed the units-bearing extra arg, so units defaulted to 1). eval-141 (test/chat-state.test.ts) proves behaviorally: 6 chat-state actions in one run cost 0 budget, real sendText still caps at MAX_SENDS_PER_RUN=5 in the same run. 178/178 tests passing.
+<!-- SECTION:NOTES:END -->
