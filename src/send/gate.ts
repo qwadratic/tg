@@ -42,6 +42,14 @@ export interface SentRecord {
     | 'text' | 'photo' | 'video' | 'document' | 'delete' | 'forward' | 'edit' | 'read'
     // Chat state, private to the account owner: no counterparty ever sees these.
     | 'archive' | 'unarchive' | 'pin' | 'unpin' | 'mute' | 'unmute' | 'unread'
+    // Group/channel administration (D13c). Unlike the chat-state seven these
+    // ARE visible to everyone in the chat, and some (a revoked primary invite
+    // link, a released username) cannot be undone.
+    | 'create-group' | 'create-channel' | 'create-supergroup'
+    | 'chat-title' | 'chat-description' | 'chat-photo' | 'chat-color'
+    | 'chat-sticker-set' | 'chat-username'
+    | 'invite-link' | 'forum-topic'
+    | 'slow-mode' | 'content-protection' | 'join-requests' | 'join-to-send'
   /**
    * Message id on success, null on failure. For a delete, the first id removed;
    * for a forward, the first message created in the destination chat; for an

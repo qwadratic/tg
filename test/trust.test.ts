@@ -90,7 +90,29 @@ const WRITE_RPCS = [
   // property that makes src/send/ reviewable is "every write RPC is here".
   'archiveChats',
   'unarchiveChats',
-  'markChatUnread'
+  'markChatUnread',
+  // Group/channel administration (D13c). All high-level mtcute methods, so the
+  // call-site regex above catches them; nothing here needs a raw TL literal.
+  'createGroup',
+  'createChannel',
+  'createSupergroup',
+  'setChatTitle',
+  'setChatDescription',
+  'setChatPhoto',
+  'setChatColor',
+  'setChatStickerSet',
+  'setChatUsername',
+  'exportInviteLink',
+  'createInviteLink',
+  'editInviteLink',
+  'createForumTopic',
+  'editForumTopic',
+  'toggleForumTopicClosed',
+  'toggleForumTopicPinned',
+  'setSlowMode',
+  'toggleContentProtection',
+  'toggleJoinRequests',
+  'toggleJoinToSend'
 ] as const
 
 /**
@@ -118,7 +140,10 @@ const WRITE_ALLOWLIST = new Set([
   'send/index.ts',
   'send/gate.ts',
   'cli/commands/send.ts',
-  'contacts/import.ts'
+  'contacts/import.ts',
+  // D13c: the `tg group` command layer names the same imported function names.
+  // The RPCs themselves still happen only in send/index.ts.
+  'cli/commands/group.ts'
 ])
 
 /** The raw TL method name as a string literal, in any of the three quote styles. */

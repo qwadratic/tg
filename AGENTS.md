@@ -104,8 +104,11 @@ person, so it has rules that are enforced by `test/trust.test.ts`, not by taste:
   layer so that exactly one place turns a reference into an identity, and that
   identity is what gets confirmed and logged. eval-33 and eval-65 pin this.
 - **Do not add a write RPC anywhere outside `src/send/`.** eval-29 fails the
-  suite if `sendText`, `sendMedia`, `forwardMessages`, `deleteMessages`,
-  `editMessage` or `readHistory` is called from any file not on the allowlist.
+  suite if any name in `WRITE_RPCS` or `WRITE_TL_METHODS` (`test/trust.test.ts`)
+  is called from a file not on `WRITE_ALLOWLIST`. Those lists are the contract -
+  read them there rather than trusting a copy here, which goes stale every time
+  the fence widens. Adding a write verb means adding its RPC name to the list
+  AND justifying any allowlist entry in a decision file (D13, D13a, D13b, D13c).
 - **Do not import `src/send/` from an unattended path.** eval-30 and eval-31 walk
   the import graphs of `export`, `folders`, `ship`, `sync` and every read verb,
   and fail if any of them can reach it. That is what makes "a cron job cannot
@@ -149,6 +152,7 @@ That is intended. Do not start an export beside it.
 | `src/peers/id.ts` | `assertPeerId` — the send module's own numeric boundary |
 | `src/peers/index.ts` | dialog listing and name matching |
 | `src/dump/index.ts` | flat chat transcripts |
+| `src/groups/index.ts` | group/channel READS: invite links, forum topics. Imports no send code |
 | `src/media/index.ts` | media download |
 | `src/watch/index.ts` | polling for media not yet sent |
 | `src/send/gate.ts` | send caps, confirmation rule, audit log. No RPCs |

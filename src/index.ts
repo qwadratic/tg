@@ -16,12 +16,13 @@ import { registerDumpCommand } from './cli/commands/dump.js'
 import { registerMediaCommand } from './cli/commands/media.js'
 import { registerWatchCommand } from './cli/commands/watch.js'
 import { registerSendCommand } from './cli/commands/send.js'
+import { registerGroupCommand } from './cli/commands/group.js'
 import { registerUpdateCommand } from './cli/commands/update.js'
 import { registerDoctorCommand } from './cli/commands/doctor.js'
 import { scheduleUpdateCheck } from './update/index.js'
 import { EXIT } from './exit-codes.js'
 
-const VERSION = '0.6.0'
+const VERSION = '0.7.0'
 
 const program = new Command()
   .name('tg')
@@ -49,6 +50,8 @@ registerShipCommand(program)
 // Write verbs last, and registered from one place, so the only path into
 // `src/send/` is a command a human typed. See test/trust.test.ts.
 registerSendCommand(program)
+// Chat administration: same fence, different category - nothing here sends.
+registerGroupCommand(program)
 registerUpdateCommand(program, VERSION)
 
 // One synchronous file read, then a detached child if the cache is stale. This

@@ -154,10 +154,46 @@ tg note "remember this"     # to your own Saved Messages
 tg send log                 # what this workspace has already sent
 ```
 
+**"Administer a group or channel."** Same gate as sending, no send budget: none
+of these posts a message, but every member of the chat sees the result.
+```sh
+tg group create-channel "Ops" --description "..."
+tg group create-supergroup "Ops" --forum
+tg group create-group "Us three" <id> <id>   # numeric ids only
+tg group title <peer> "New name"
+tg group description <peer> "what this is for"
+tg group photo <peer> ./avatar.png
+tg group color <peer> 3          # palette index, not RGB
+tg group sticker-set <peer> <shortName>
+tg group username <peer> ops_room        # claim a public handle
+tg group remove-username <peer>          # release it - anyone may take it
+tg group invite-export <peer>            # REVOKES the old primary link
+tg group invite-new <peer> --limit 10 --approval
+tg group invite-edit <peer> <link> --limit 20
+tg group invite-list <peer>              # read-only
+tg group invite-members <peer>           # read-only
+tg group topic-new <peer> "Bugs"
+tg group topic-edit <peer> <topicId> "Bugs and crashes"
+tg group topic-closed <peer> <topicId> on
+tg group topic-pinned <peer> <topicId> on
+tg group topic-list <peer>               # read-only
+tg group slow-mode <peer> 30             # 0 disables
+tg group protect <peer> on               # restrict saving content
+tg group join-requests <peer> on
+tg group join-to-send <peer> on
+```
+
+Two are not reversible: `tg group invite-export` breaks every copy of the old
+primary link, and `tg group remove-username` returns the handle to the global
+pool. Membership (add/kick/ban/restrict) and admin rights are NOT implemented -
+do not try to reach them another way.
+
 ## Hard rules — these are enforced, not advisory
 
-1. **Sending reaches a real person and cannot be undone.** `tg send` refuses in
-   a non-interactive run unless `--yes` is passed. If a send was refused, that
+1. **Sending reaches a real person and cannot be undone.** `tg send` **and
+   `tg group`** refuse in a non-interactive run unless `--yes` is passed - the
+   group writes are behind the identical gate, and two of them (`invite-export`,
+   `remove-username`) are irreversible. If a send was refused, that
    refusal is the feature: report it and ask the operator. Do not add `--yes` to
    get past it.
 2. **Do not raise `TG_MAX_SENDS_PER_RUN` or `TG_MAX_SENDS_PER_DAY`** to push a

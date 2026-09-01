@@ -31,6 +31,47 @@ export interface DumpLine {
    * transcript that drops them loses exactly the references worth following.
    */
   refs: string[]
+  /**
+   * Engagement, as a compact suffix: views, forwards, top reactions, replies,
+   * and whether it was edited. Empty for a message that carries none of them,
+   * which is every message in an ordinary 1:1 chat - Telegram simply does not
+   * populate these fields there, so nothing has to filter them out by hand.
+   */
+  stats: string
+}
+
+/**
+ * The engagement fields mtcute already exposes, folded into one short suffix.
+ *
+ * Only non-empty values appear. A raw dump of `reactions` would be a page of
+ * structure per message; what a reader wants from a channel post is the shape
+ * of the response, so this keeps the three loudest emoji with their counts.
+ */
+export function messageStats(msg: Message): string {
+  const parts: string[] = []
+  if (msg.views) parts.push(`${msg.views} views`)
+  if (msg.forwards) parts.push(`${msg.forwards} fwd`)
+
+  const reactions = msg.reactions?.reactions ?? []
+  if (reactions.length > 0) {
+    parts.push(
+      [...reactions]
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 3)
+        // A custom emoji has no unicode form - its `emoji` is a Long id - so it
+        // is shown as a marker rather than a number nobody can read.
+        .map((r) => `${typeof r.emoji === 'string' ? r.emoji : 'custom'}${r.count}`)
+        .join(' ')
+    )
+  }
+
+  const replies = msg.replies?.count
+  if (replies) parts.push(`${replies} replies`)
+  // `hideEditMark` is Telegram's own "treat this as unedited" flag, which its
+  // clients honour; an editDate alone would mark messages nobody sees as edited.
+  if (msg.editDate && !msg.hideEditMark) parts.push('edited')
+
+  return parts.join(', ')
 }
 
 /** Pull every URL and filename a message carries, without duplicates. */
@@ -101,7 +142,8 @@ export async function dumpThread(
       who: (msg.sender as unknown as { firstName?: string })?.firstName ?? '?',
       text,
       media,
-      refs: messageRefs(msg)
+      refs: messageRefs(msg),
+      stats: messageStats(msg)
     })
   }
 
@@ -117,7 +159,8 @@ export function renderDump(lines: DumpLine[]): string {
     .map((line) => {
       const media = line.media ? ` <${line.media}>` : ''
       const refs = line.refs.length > 0 ? ` [${line.refs.join(' ')}]` : ''
-      return `[${line.at}] ${line.who}: ${line.text}${media}${refs}`
+      const stats = line.stats ? ` (${line.stats})` : ''
+      return `[${line.at}] ${line.who}: ${line.text}${media}${refs}${stats}`
     })
     .join('\n')}\n`
 }

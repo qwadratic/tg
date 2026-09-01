@@ -130,6 +130,16 @@ hand-edited, per-machine file, never part of a workspace, never committed.
 | `media pull [peer] [--kind photo,video] [--max n] [--to dir]` | download media; no peer means your Saved Messages |
 | `watch [peer] [--minutes n] [--kind ...]` | wait for media that has not been sent yet, then download it |
 
+`dump` appends an engagement suffix when Telegram populates one — views,
+forwards, the three loudest reactions, the reply/comment count, and `edited`:
+
+```
+[2026-08-30T09:12] Ada: shipping today <photo> (1200 views, 3 fwd, ❤️9 🔥5, 7 replies)
+```
+
+A 1:1 chat carries none of those fields, so nothing is added there — no row of
+zeroes on every line.
+
 ### Naming a chat
 
 Anywhere a command takes a chat, all four of these work:
@@ -284,6 +294,53 @@ cannot be aimed at another person by mistake.
 The unattended commands provably cannot send: `test/trust.test.ts` walks the
 import graphs of `export`, `folders`, `ship` and every read verb and fails the
 suite if any of them can reach the send module. A cron job cannot message anyone.
+
+## Administering a group or channel
+
+`tg group` changes what a chat *is* — its name, its picture, who may join, how
+it is organised. Nothing here posts a message, so none of it spends the send
+budget, but all of it goes through the same fence: a numeric peer id, the
+confirmation prompt (or `--yes`), and a line in `data/sent.jsonl`.
+
+| command | what it does |
+| --- | --- |
+| `group create-group <title> <ids...>` | create a legacy group with its first members |
+| `group create-channel <title> [--description ...]` | create a broadcast channel |
+| `group create-supergroup <title> [--forum]` | create a supergroup, optionally with topics |
+| `group title <peer> <title>` | rename a chat |
+| `group description <peer> <text>` | set the description; `""` clears it |
+| `group photo <peer> <file>` | set the photo or video avatar from a local file |
+| `group color <peer> <colorId> [--profile]` | set the accent colour by palette index |
+| `group sticker-set <peer> <shortName>` | set the group's sticker set |
+| `group username <peer> <username>` | claim a public @username |
+| `group remove-username <peer>` | release it and go private again |
+| `group invite-export <peer>` | regenerate the primary invite link — revokes the old one |
+| `group invite-new <peer> [--expires ...] [--limit ...] [--approval]` | create an extra invite link |
+| `group invite-edit <peer> <link> [...]` | edit a non-primary invite link |
+| `group invite-list <peer> [--revoked]` | list your invite links (read-only) |
+| `group invite-members <peer> [--link ...]` | who joined through a link (read-only) |
+| `group topic-new <peer> <title> [--icon ...]` | create a forum topic |
+| `group topic-edit <peer> <topicId> <title>` | rename a forum topic |
+| `group topic-closed <peer> <topicId> <on\|off>` | close or reopen a topic |
+| `group topic-pinned <peer> <topicId> <on\|off>` | pin or unpin a topic |
+| `group topic-list <peer>` | list a forum's topics (read-only) |
+| `group slow-mode <peer> <seconds>` | slow mode; `0` disables it |
+| `group protect <peer> <on\|off>` | restrict saving and forwarding content |
+| `group join-requests <peer> <on\|off>` | require admin approval to join by link |
+| `group join-to-send <peer> <on\|off>` | require joining before posting |
+
+Two of these do not come back:
+
+- `invite-export` revokes the previous primary link, so every copy already
+  pasted into a message stops working.
+- `remove-username` puts the handle straight back into the global pool, where a
+  stranger can claim it seconds later.
+
+`color` takes Telegram's own palette **index**, not an RGB value: `0-6` are the
+built-in red, orange, purple, green, sea, blue, pink, and higher ids come from
+the server's app config. Membership verbs (add, kick, ban, restrict) and admin
+rights are deliberately **not** here — see
+`backlog/decisions/2026-08-31-widen-the-fenced-write-verbs-to-group-channel-management.md`.
 
 ## Sessions
 

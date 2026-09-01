@@ -436,3 +436,450 @@ export async function sendNote(
   const peer = await tg.resolvePeer(me.id)
   return guardedSend(me.id, 'text', text.length, () => tg.sendText(peer, text))
 }
+
+/**
+ * Group and channel administration (D13c).
+ *
+ * A second widening of the fence, and a different risk shape from the D13b
+ * chat-state seven: those were private to the account owner, these are visible
+ * to every member of the chat, and a few are effectively irreversible - a
+ * regenerated primary invite link revokes the old one for everyone holding it,
+ * and a released public username can be claimed by a stranger seconds later.
+ *
+ * They cost ZERO cap units: the caps bound DELIVERED messages, and none of
+ * these delivers one. They still take the confirmation gate and the audit log,
+ * which is the part that matters for an action nobody can take back.
+ *
+ * Every one uses a high-level mtcute method, so the fence catches them through
+ * WRITE_RPCS rather than the raw TL literal list.
+ */
+
+/** Chat creation has no target peer yet, so the log records 0. */
+const NO_PEER = 0
+
+/** Options every administration verb takes, plus its own arguments. */
+export type AdminOptions = SendTextOptions
+
+/** Create a legacy group with an initial member list. */
+export async function createGroup(
+  tg: TelegramClient,
+  title: string,
+  userIds: number[],
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  assertConfirmed(options)
+  if (!title.trim()) throw new OperatorError('Give the group a title.')
+  // Telegram's own rule: a legacy group cannot be created with just yourself.
+  if (userIds.length === 0) {
+    throw new OperatorError('A legacy group needs at least one other member. Give a peer id.')
+  }
+  const users = userIds.map((id) => assertPeerId(id))
+
+  return guardedSend(NO_PEER, 'create-group', 0, async () => {
+    const { chat } = await tg.createGroup({ title, users })
+    return { id: chat.id }
+  }, { units: 0 })
+}
+
+/** Create a broadcast channel. */
+export async function createChannel(
+  tg: TelegramClient,
+  title: string,
+  options: AdminOptions & { description?: string | undefined } = {}
+): Promise<SentRecord> {
+  assertConfirmed(options)
+  if (!title.trim()) throw new OperatorError('Give the channel a title.')
+
+  return guardedSend(NO_PEER, 'create-channel', 0, async () => {
+    const chat = await tg.createChannel({
+      title,
+      ...(options.description ? { description: options.description } : {})
+    })
+    return { id: chat.id }
+  }, { units: 0 })
+}
+
+/** Create a supergroup, optionally as a forum. */
+export async function createSupergroup(
+  tg: TelegramClient,
+  title: string,
+  options: AdminOptions & { description?: string | undefined; forum?: boolean | undefined } = {}
+): Promise<SentRecord> {
+  assertConfirmed(options)
+  if (!title.trim()) throw new OperatorError('Give the supergroup a title.')
+
+  return guardedSend(NO_PEER, 'create-supergroup', 0, async () => {
+    const chat = await tg.createSupergroup({
+      title,
+      ...(options.description ? { description: options.description } : {}),
+      ...(options.forum ? { forum: true } : {})
+    })
+    return { id: chat.id }
+  }, { units: 0 })
+}
+
+/** Rename a chat. Everyone in it sees a service message. */
+export async function setChatTitle(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  title: string,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  if (!title.trim()) throw new OperatorError('Refusing to set an empty title.')
+
+  return guardedSend(peerId, 'chat-title', 0, async () => {
+    await tg.setChatTitle(peerId, title)
+    return { id: 0 }
+  }, { units: 0 })
+}
+
+/** Change a chat's description. An empty string clears it, which is allowed. */
+export async function setChatDescription(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  description: string,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  return guardedSend(peerId, 'chat-description', 0, async () => {
+    await tg.setChatDescription(peerId, description)
+    return { id: 0 }
+  }, { units: 0 })
+}
+
+/** Set a chat's photo from a local file. */
+export async function setChatPhoto(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  filePath: string,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  if (!existsSync(filePath)) throw new OperatorError(`No such file: ${filePath}`)
+
+  // A chat photo is a photo or a video avatar; the same extension rule the
+  // send path already uses decides which, and a document is neither.
+  const kind = mediaKindFor(filePath)
+  if (kind === 'document') {
+    throw new OperatorError(`Not an image or video: ${filePath}. A chat photo must be one.`)
+  }
+  const file = await readFile(filePath)
+
+  return guardedSend(peerId, 'chat-photo', 0, async () => {
+    await tg.setChatPhoto({ chatId: peerId, type: kind, media: file })
+    return { id: 0 }
+  }, { units: 0 })
+}
+
+/**
+ * Set a chat's accent colour.
+ *
+ * `color` is Telegram's own palette INDEX, not an RGB value: 0-6 are the
+ * built-in red, orange, purple, green, sea, blue, pink, and anything higher
+ * comes from `help.getAppConfig`. Passed through faithfully rather than wrapped
+ * in a palette of our own, which would go stale the moment Telegram adds one.
+ */
+export async function setChatColor(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  color: number,
+  options: AdminOptions & { forProfile?: boolean | undefined } = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  if (!Number.isInteger(color) || color < 0) {
+    throw new OperatorError(`Not a colour id: ${color}. Ids are non-negative integers (0-6 are built in).`)
+  }
+
+  return guardedSend(peerId, 'chat-color', 0, async () => {
+    await tg.setChatColor({
+      peer: peerId,
+      color,
+      ...(options.forProfile ? { forProfile: true } : {})
+    })
+    return { id: 0 }
+  }, { units: 0 })
+}
+
+/** Set the sticker set a supergroup uses. `set` is a short name or set id. */
+export async function setChatStickerSet(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  set: string,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  if (!set.trim()) throw new OperatorError('Give a sticker set short name.')
+
+  return guardedSend(peerId, 'chat-sticker-set', 0, async () => {
+    await tg.setChatStickerSet(peerId, set)
+    return { id: 0 }
+  }, { units: 0 })
+}
+
+/**
+ * Claim or release a public username.
+ *
+ * `null` makes the chat private, and is the irreversible half: the handle goes
+ * back into the global pool immediately, where anyone can take it. mtcute
+ * spells "remove" as an explicit null, so this does too rather than inventing
+ * a second function.
+ */
+export async function setChatUsername(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  username: string | null,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  // 5-32 characters, and the first must be a letter: 4 + 1 = 5, so the tail is
+  // {4,31}. The looser {3,31} let 'abcd' through here for Telegram to reject.
+  if (username !== null && !/^[a-zA-Z][a-zA-Z0-9_]{4,31}$/.test(username)) {
+    throw new OperatorError(
+      `Not a Telegram username: ${username}. 5-32 characters, letters, digits and _.`
+    )
+  }
+
+  return guardedSend(peerId, 'chat-username', 0, async () => {
+    await tg.setChatUsername(peerId, username)
+    return { id: 0 }
+  }, { units: 0 })
+}
+
+/** A write that produces a link, so the caller gets the link alongside the record. */
+export interface InviteLinkResult {
+  record: SentRecord
+  link: string
+}
+
+/**
+ * Regenerate the primary invite link.
+ *
+ * Destructive in a way the name hides: the OLD primary link is revoked, so
+ * every copy of it already pasted into a message stops working.
+ */
+export async function exportInviteLink(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  options: AdminOptions = {}
+): Promise<InviteLinkResult> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  const out: { link: string } = { link: '' }
+  const record = await guardedSend(peerId, 'invite-link', 0, async () => {
+    out.link = (await tg.exportInviteLink(peerId)).link
+    return { id: 0 }
+  }, { units: 0 })
+  return { record, link: out.link }
+}
+
+export interface InviteLinkOptions extends AdminOptions {
+  /** UNIX ms or a Date; when the link stops working. */
+  expires?: number | undefined
+  usageLimit?: number | undefined
+  withApproval?: boolean | undefined
+}
+
+/** Create an additional invite link, leaving the primary one alone. */
+export async function createInviteLink(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  options: InviteLinkOptions = {}
+): Promise<InviteLinkResult> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  const out: { link: string } = { link: '' }
+  const record = await guardedSend(peerId, 'invite-link', 0, async () => {
+    out.link = (await tg.createInviteLink(peerId, {
+      ...(options.expires === undefined ? {} : { expires: options.expires }),
+      ...(options.usageLimit === undefined ? {} : { usageLimit: options.usageLimit }),
+      ...(options.withApproval === undefined ? {} : { withApproval: options.withApproval })
+    })).link
+    return { id: 0 }
+  }, { units: 0 })
+  return { record, link: out.link }
+}
+
+/** Edit a non-primary invite link. Only the fields passed are changed. */
+export async function editInviteLink(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  link: string,
+  options: InviteLinkOptions = {}
+): Promise<InviteLinkResult> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  if (!link.trim()) throw new OperatorError('Give the invite link to edit.')
+
+  const out: { link: string } = { link: '' }
+  const record = await guardedSend(peerId, 'invite-link', 0, async () => {
+    out.link = (await tg.editInviteLink({
+      chatId: peerId,
+      link,
+      ...(options.expires === undefined ? {} : { expires: options.expires }),
+      ...(options.usageLimit === undefined ? {} : { usageLimit: options.usageLimit }),
+      ...(options.withApproval === undefined ? {} : { withApproval: options.withApproval })
+    })).link
+    return { id: 0 }
+  }, { units: 0 })
+  return { record, link: out.link }
+}
+
+/** Create a forum topic. The record's messageId is the topic's top message id. */
+export async function createForumTopic(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  title: string,
+  options: AdminOptions & { icon?: number | undefined } = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  if (!title.trim()) throw new OperatorError('Give the topic a title.')
+
+  return guardedSend(peerId, 'forum-topic', 0, async () => {
+    const message = await tg.createForumTopic({
+      chatId: peerId,
+      title,
+      ...(options.icon === undefined ? {} : { icon: options.icon })
+    })
+    return { id: message.id }
+  }, { units: 0 })
+}
+
+/** Rename a forum topic. */
+export async function editForumTopic(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  topicId: number,
+  title: string,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  assertTopicId(topicId)
+  if (!title.trim()) throw new OperatorError('Refusing to set an empty topic title.')
+
+  return guardedSend(peerId, 'forum-topic', 0, async () => {
+    const message = await tg.editForumTopic({ chatId: peerId, topicId, title })
+    return { id: message.id }
+  }, { units: 0 })
+}
+
+/** A topic id is the id of its top message, so the same rule applies. */
+function assertTopicId(topicId: number): void {
+  if (!Number.isInteger(topicId) || topicId <= 0) {
+    throw new OperatorError(`Not a topic id: ${topicId}. Ids are positive integers.`)
+  }
+}
+
+/** Close or reopen a forum topic. */
+export async function setForumTopicClosed(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  topicId: number,
+  closed: boolean,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  assertTopicId(topicId)
+
+  return guardedSend(peerId, 'forum-topic', 0, async () => {
+    const message = await tg.toggleForumTopicClosed({ chatId: peerId, topicId, closed })
+    return { id: message.id }
+  }, { units: 0 })
+}
+
+/** Pin or unpin a forum topic. */
+export async function setForumTopicPinned(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  topicId: number,
+  pinned: boolean,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  assertTopicId(topicId)
+
+  return guardedSend(peerId, 'forum-topic', 0, async () => {
+    await tg.toggleForumTopicPinned({ chatId: peerId, topicId, pinned })
+    return { id: 0 }
+  }, { units: 0 })
+}
+
+/** Set the slow-mode interval in seconds; 0 turns it off. */
+export async function setSlowMode(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  seconds: number,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  if (!Number.isInteger(seconds) || seconds < 0) {
+    throw new OperatorError(`Not a slow-mode interval: ${seconds}. Give seconds, or 0 to disable.`)
+  }
+
+  return guardedSend(peerId, 'slow-mode', 0, async () => {
+    await tg.setSlowMode(peerId, seconds)
+    return { id: 0 }
+  }, { units: 0 })
+}
+
+/** Turn "restrict saving content" on or off. */
+export async function setContentProtection(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  enabled: boolean,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  return guardedSend(peerId, 'content-protection', 0, async () => {
+    await tg.toggleContentProtection(peerId, enabled)
+    return { id: 0 }
+  }, { units: 0 })
+}
+
+/** Require an admin to approve people joining by link. */
+export async function setJoinRequests(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  enabled: boolean,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  return guardedSend(peerId, 'join-requests', 0, async () => {
+    await tg.toggleJoinRequests(peerId, enabled)
+    return { id: 0 }
+  }, { units: 0 })
+}
+
+/** Require joining a discussion group before being able to post in it. */
+export async function setJoinToSend(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  enabled: boolean,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  return guardedSend(peerId, 'join-to-send', 0, async () => {
+    await tg.toggleJoinToSend(peerId, enabled)
+    return { id: 0 }
+  }, { units: 0 })
+}
