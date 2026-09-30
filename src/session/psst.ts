@@ -42,12 +42,14 @@ const cache = new Map<string, string | null>()
  *                    PSST_PASSWORD in the environment (psst exit 5)
  *   decrypt_failed - a key was given but it is the wrong one: psst prints
  *                    "Fatal error: The operation failed ..." (exit 1)
+ *   psst_unrunnable - `psst` is on PATH but will not start (exit 126/127),
+ *                    typically a bun-script install whose `bun` is not on PATH
  *
- * Both used to be swallowed as "no value", so a locked vault showed up as
+ * All used to be swallowed as "no value", so a locked vault showed up as
  * "API_ID and API_HASH are not set" - and, worse, getOrCreateDbKey() minted a
  * fresh cache key over the unreadable one, orphaning data/session.db.
  */
-export type VaultProblem = 'unlock_failed' | 'decrypt_failed'
+export type VaultProblem = 'unlock_failed' | 'decrypt_failed' | 'psst_unrunnable'
 
 let vaultProblem: VaultProblem | null = null
 
@@ -59,18 +61,33 @@ export function lastVaultProblem(): VaultProblem | null {
 /**
  * Map a failed `psst get` to a problem. Pure; exported for tests.
  *   2 not_found, 3 no_vault, no exit status (psst not installed) -> null: just "no value"
- *   5 unlock_failed -> 'unlock_failed'; any other exit (1: wrong key) -> 'decrypt_failed'
+ *   5 -> 'unlock_failed'; 126/127 (would not start) -> 'psst_unrunnable'
+ *   any other exit (1: wrong key) -> 'decrypt_failed'
  */
 export function classifyPsstFailure(status: number | null | undefined): VaultProblem | null {
   if (status === null || status === undefined || status === 2 || status === 3) return null
-  return status === 5 ? 'unlock_failed' : 'decrypt_failed'
+  if (status === 5) return 'unlock_failed'
+  if (status === 126 || status === 127) return 'psst_unrunnable'
+  return 'decrypt_failed'
 }
 
 /** What to tell a human about a vault problem. */
 export function vaultProblemHint(problem: VaultProblem): string {
-  return problem === 'unlock_failed'
-    ? 'the psst vault did not unlock: no keychain here - export PSST_PASSWORD'
-    : 'the psst vault did not decrypt: PSST_PASSWORD is not this vault\'s password'
+  switch (problem) {
+    case 'unlock_failed':
+      return 'the psst vault did not unlock: no keychain here - export PSST_PASSWORD'
+    case 'decrypt_failed':
+      return 'the psst vault did not decrypt: PSST_PASSWORD is not this vault\'s password'
+    case 'psst_unrunnable':
+      return 'psst is on PATH but would not start (exit 126/127) - usually its runtime, bun, is not on PATH'
+  }
+}
+
+/** The one command that fixes a vault problem. */
+export function vaultProblemFix(problem: VaultProblem): string {
+  return problem === 'psst_unrunnable'
+    ? 'export PATH="$HOME/.bun/bin:$PATH"  (wherever bun is installed)'
+    : 'export PSST_PASSWORD=...  (this vault\'s password), or run under: psst run tg ...'
 }
 
 function psstGet(name: string, global: boolean): string | null {
@@ -109,8 +126,12 @@ export function psstAvailable(): boolean {
   try {
     execFileSync('psst', ['--version'], { stdio: 'ignore' })
     psstPresent = true
-  } catch {
+  } catch (error) {
     psstPresent = false
+    // Found but would not start is not "not installed": the vault may be full.
+    if (classifyPsstFailure((error as { status?: number | null }).status) === 'psst_unrunnable') {
+      vaultProblem = 'psst_unrunnable'
+    }
   }
   return psstPresent
 }
@@ -216,7 +237,7 @@ export function getOrCreateDbKey(): string {
     throw new OperatorError(
       `Could not read ${SECRETS.dbKey}: ${vaultProblemHint(problem)}.\n` +
       '  Not creating a new cache key - that would orphan the local cache.\n' +
-      '  Fix the password, then retry:  export PSST_PASSWORD=...  (or: psst run tg ...)'
+      `  Fix that, then retry:  ${vaultProblemFix(problem)}`
     )
   }
 

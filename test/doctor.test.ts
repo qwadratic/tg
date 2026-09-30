@@ -54,6 +54,24 @@ test('eval-87 missing configuration is distinguishable from a missing login', ()
   assert.equal(report.hint, 'psst set API_ID', 'the hint is the first actionable fix')
 })
 
+test('unreadable credentials are configuration, not a login, even when liveness fails too', () => {
+  // A locked vault fails both checks. "tg session login" cannot help - the
+  // login needs API_ID too - so the password fix must be what the operator sees.
+  const fix = 'export PSST_PASSWORD=...'
+  const report = summarise(
+    [
+      ok('psst'),
+      { name: 'api-credentials', status: 'fail', detail: 'not readable: the psst vault did not decrypt', fix },
+      ok('session'),
+      { name: 'liveness', status: 'fail', detail: 'Could not read TG_SESSION_DB_KEY', fix }
+    ],
+    '/w'
+  )
+  assert.equal(report.status, 'not_configured')
+  assert.equal(report.exitCode, EXIT.notConfigured)
+  assert.equal(report.hint, fix)
+})
+
 test('eval-88 a lock held by a live run is not a failure', () => {
   // An hourly job overlapping the previous one is normal operation. Reporting
   // it as broken would page someone every night for a system working correctly.

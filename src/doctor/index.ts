@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ARCHIVE_DIR, DATA_DIR, LOCK_PATH, SESSION_DB_PATH } from '../paths.js'
 import { peerCacheStats } from '../session/cache.js'
-import { lastVaultProblem, psstAvailable, readSecret, SECRETS, vaultProblemHint } from '../session/psst.js'
+import { lastVaultProblem, psstAvailable, readSecret, SECRETS, vaultProblemFix, vaultProblemHint } from '../session/psst.js'
 import { EXIT } from '../exit-codes.js'
 
 /**
@@ -56,26 +56,34 @@ export function offlineChecks(): Check[] {
   checks.push(
     psstAvailable()
       ? { name: 'psst', status: 'ok', detail: 'on PATH' }
-      : {
-          name: 'psst',
-          status: 'warn',
-          detail: 'not installed; secrets must come from the environment',
-          fix: 'https://github.com/vpetrigo/psst'
-        }
+      : lastVaultProblem() === 'psst_unrunnable'
+        ? {
+            name: 'psst',
+            status: 'warn',
+            detail: vaultProblemHint('psst_unrunnable'),
+            fix: vaultProblemFix('psst_unrunnable')
+          }
+        : {
+            name: 'psst',
+            status: 'warn',
+            detail: 'not installed; secrets must come from the environment',
+            fix: 'https://github.com/vpetrigo/psst'
+          }
   )
 
   const apiId = readSecret(SECRETS.apiId)
   const apiHash = readSecret(SECRETS.apiHash)
+  const vaultProblem = lastVaultProblem()
   checks.push(
     apiId && apiHash
       ? { name: 'api-credentials', status: 'ok', detail: 'API_ID and API_HASH resolve' }
-      : lastVaultProblem()
+      : vaultProblem
         ? {
             // The names may well be in the vault; it just would not open.
             name: 'api-credentials',
             status: 'fail',
-            detail: `not readable: ${vaultProblemHint(lastVaultProblem()!)}`,
-            fix: 'export PSST_PASSWORD=... (this vault\'s password), or run under: psst run tg ...'
+            detail: `not readable: ${vaultProblemHint(vaultProblem)}`,
+            fix: vaultProblemFix(vaultProblem)
           }
         : {
             name: 'api-credentials',
@@ -176,7 +184,11 @@ export function offlineChecks(): Check[] {
 /** Turn the check list into the one thing the caller must do. */
 export function summarise(checks: Check[], workspace: string): DoctorReport {
   const failed = checks.filter((c) => c.status === 'fail')
-  const sessionFailed = failed.some((c) => c.name === 'session' || c.name === 'liveness')
+  // Unreadable API credentials come first: a login needs them too, so "log in
+  // again" would send the operator round in a circle (a locked vault fails the
+  // liveness probe as well, which used to win and say exactly that).
+  const credentials = failed.find((c) => c.name === 'api-credentials')
+  const sessionFailed = !credentials && failed.some((c) => c.name === 'session' || c.name === 'liveness')
   const busy = checks.some((c) => c.name === 'lock' && c.status === 'warn' && c.detail.includes('pid'))
 
   if (sessionFailed) {
@@ -189,7 +201,7 @@ export function summarise(checks: Check[], workspace: string): DoctorReport {
       exitCode: EXIT.needsHuman
     }
   }
-  const [firstFailed] = failed
+  const firstFailed = credentials ?? failed[0]
   if (firstFailed) {
     return {
       ok: false,

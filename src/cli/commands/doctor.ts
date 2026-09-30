@@ -7,6 +7,7 @@ import {
   workspaceLabel,
   type Check
 } from '../../doctor/index.js'
+import { lastVaultProblem, vaultProblemFix } from '../../session/psst.js'
 import { withAuthenticatedClient } from './shared.js'
 import { runCommand } from '../errors.js'
 
@@ -44,11 +45,13 @@ export function registerDoctorCommand(program: Command): void {
             // saying "log in again" there would send the operator to fix a
             // thing that is not broken.
             const busy = /already running/i.test(message)
+            // Likewise a vault that would not open: logging in cannot fix that.
+            const vaultProblem = lastVaultProblem()
             checks.push({
               name: busy ? 'lock' : 'liveness',
               status: busy ? 'warn' : 'fail',
               detail: busy ? 'another run holds the lock, so liveness went unchecked' : message,
-              fix: busy ? undefined : 'tg session login'
+              fix: busy ? undefined : vaultProblem ? vaultProblemFix(vaultProblem) : 'tg session login'
             })
           }
         } else if (!options.offline) {
