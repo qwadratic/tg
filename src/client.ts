@@ -3,7 +3,7 @@ import { TelegramClient } from '@mtcute/node'
 import { BaseSqliteStorage, networkMiddlewares } from '@mtcute/core'
 import { EncryptedSqliteStorage } from './storage/encrypted.js'
 import { SESSION_DB_PATH } from './session/cache.js'
-import { readSecret, SECRETS } from './session/psst.js'
+import { lastVaultProblem, readSecret, SECRETS, vaultProblemHint } from './session/psst.js'
 import { readSessionMeta } from './session/ttl.js'
 import { friendlyHostname } from './hosts.js'
 
@@ -57,6 +57,8 @@ export function createClient(cacheKey: string): TelegramClient {
   const apiHash = readSecret(SECRETS.apiHash)
 
   if (!apiId || !apiHash) {
+    const problem = lastVaultProblem()
+    if (problem) throw new Error(`API_ID and API_HASH could not be read: ${vaultProblemHint(problem)}.`)
     throw new Error(
       'API_ID and API_HASH are not set.\n' +
       '  Store them in the vault:  psst set API_ID && psst set API_HASH\n' +

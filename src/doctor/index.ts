@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ARCHIVE_DIR, DATA_DIR, LOCK_PATH, SESSION_DB_PATH } from '../paths.js'
 import { peerCacheStats } from '../session/cache.js'
-import { psstAvailable, readSecret, SECRETS } from '../session/psst.js'
+import { lastVaultProblem, psstAvailable, readSecret, SECRETS, vaultProblemHint } from '../session/psst.js'
 import { EXIT } from '../exit-codes.js'
 
 /**
@@ -69,12 +69,20 @@ export function offlineChecks(): Check[] {
   checks.push(
     apiId && apiHash
       ? { name: 'api-credentials', status: 'ok', detail: 'API_ID and API_HASH resolve' }
-      : {
-          name: 'api-credentials',
-          status: 'fail',
-          detail: `missing ${!apiId ? 'API_ID' : ''}${!apiId && !apiHash ? ' and ' : ''}${!apiHash ? 'API_HASH' : ''}`,
-          fix: 'psst set API_ID && psst set API_HASH, or pass them in the environment'
-        }
+      : lastVaultProblem()
+        ? {
+            // The names may well be in the vault; it just would not open.
+            name: 'api-credentials',
+            status: 'fail',
+            detail: `not readable: ${vaultProblemHint(lastVaultProblem()!)}`,
+            fix: 'export PSST_PASSWORD=... (this vault\'s password), or run under: psst run tg ...'
+          }
+        : {
+            name: 'api-credentials',
+            status: 'fail',
+            detail: `missing ${!apiId ? 'API_ID' : ''}${!apiId && !apiHash ? ' and ' : ''}${!apiHash ? 'API_HASH' : ''}`,
+            fix: 'psst set API_ID && psst set API_HASH, or pass them in the environment'
+          }
   )
 
   const vaultSession = readSecret(SECRETS.session)
