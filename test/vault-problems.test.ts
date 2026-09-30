@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3-multiple-ciphers'
 import { cacheOpensWith, quarantineCache } from '../src/session/cache.js'
-import { classifyPsstFailure, getOrCreateDbKey, lastVaultProblem, vaultProblemHint } from '../src/session/psst.js'
+import { classifyPsstFailure, getOrCreateDbKey, lastVaultProblem, vaultProblemFix, vaultProblemHint } from '../src/session/psst.js'
 import { OperatorError } from '../src/errors.js'
 
 /**
@@ -22,11 +22,18 @@ test('classifyPsstFailure: only unlock/decrypt failures are problems', () => {
   assert.strictEqual(classifyPsstFailure(undefined), null)
   assert.strictEqual(classifyPsstFailure(5), 'unlock_failed')
   assert.strictEqual(classifyPsstFailure(1), 'decrypt_failed', 'wrong password: "Fatal error: The operation failed ..."')
+  // `#!/usr/bin/env bun` with no bun on PATH: env exits 127. Not a wrong password.
+  assert.strictEqual(classifyPsstFailure(127), 'psst_unrunnable')
+  assert.strictEqual(classifyPsstFailure(126), 'psst_unrunnable')
 })
 
-test('vaultProblemHint: says which of the two it is', () => {
+test('vaultProblemHint/Fix: says which problem it is, and the fix matches', () => {
   assert.match(vaultProblemHint('unlock_failed'), /PSST_PASSWORD/)
   assert.match(vaultProblemHint('decrypt_failed'), /not this vault's password/)
+  assert.match(vaultProblemHint('psst_unrunnable'), /bun, is not on PATH/)
+  assert.match(vaultProblemFix('decrypt_failed'), /PSST_PASSWORD/)
+  assert.match(vaultProblemFix('psst_unrunnable'), /PATH=/)
+  assert.doesNotMatch(vaultProblemFix('psst_unrunnable'), /PSST_PASSWORD/, 'a password will not start psst')
 })
 
 function makeCache(path: string, key: string) {
