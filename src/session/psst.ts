@@ -35,6 +35,44 @@ const ALIASES: Record<string, string[]> = {
  */
 const cache = new Map<string, string | null>()
 
+/**
+ * Why a vault read failed, when it was NOT the ordinary "no such secret".
+ *
+ *   unlock_failed  - no key to open the vault with: no keychain here and no
+ *                    PSST_PASSWORD in the environment (psst exit 5)
+ *   decrypt_failed - a key was given but it is the wrong one: psst prints
+ *                    "Fatal error: The operation failed ..." (exit 1)
+ *
+ * Both used to be swallowed as "no value", so a locked vault showed up as
+ * "API_ID and API_HASH are not set" - and, worse, getOrCreateDbKey() minted a
+ * fresh cache key over the unreadable one, orphaning data/session.db.
+ */
+export type VaultProblem = 'unlock_failed' | 'decrypt_failed'
+
+let vaultProblem: VaultProblem | null = null
+
+/** The last vault read failure in this process, or null when reads were fine. */
+export function lastVaultProblem(): VaultProblem | null {
+  return vaultProblem
+}
+
+/**
+ * Map a failed `psst get` to a problem. Pure; exported for tests.
+ *   2 not_found, 3 no_vault, no exit status (psst not installed) -> null: just "no value"
+ *   5 unlock_failed -> 'unlock_failed'; any other exit (1: wrong key) -> 'decrypt_failed'
+ */
+export function classifyPsstFailure(status: number | null | undefined): VaultProblem | null {
+  if (status === null || status === undefined || status === 2 || status === 3) return null
+  return status === 5 ? 'unlock_failed' : 'decrypt_failed'
+}
+
+/** What to tell a human about a vault problem. */
+export function vaultProblemHint(problem: VaultProblem): string {
+  return problem === 'unlock_failed'
+    ? 'the psst vault did not unlock: no keychain here - export PSST_PASSWORD'
+    : 'the psst vault did not decrypt: PSST_PASSWORD is not this vault\'s password'
+}
+
 function psstGet(name: string, global: boolean): string | null {
   try {
     const out = execFileSync('psst', global ? ['-g', 'get', name] : ['get', name], {
@@ -44,8 +82,11 @@ function psstGet(name: string, global: boolean): string | null {
       stdio: ['ignore', 'pipe', 'ignore']
     })
     return out.trim() || null
-  } catch {
-    // Missing secret, missing vault, or psst not installed - all mean "no value".
+  } catch (error) {
+    // Missing secret, missing vault or no psst still mean "no value"; a vault
+    // that is there but will not open is remembered, not hidden.
+    const problem = classifyPsstFailure((error as { status?: number | null }).status)
+    if (problem) vaultProblem = problem
     return null
   }
 }
@@ -166,6 +207,18 @@ export function deleteSecret(name: string): void {
 export function getOrCreateDbKey(): string {
   const existing = readSecret(SECRETS.dbKey)
   if (existing) return existing
+
+  // Not found is not the same as not readable. Minting a key over one that is
+  // merely locked away overwrites it in the vault and leaves data/session.db
+  // encrypted with a key nobody has any more ("Invalid session password").
+  const problem = lastVaultProblem()
+  if (problem) {
+    throw new OperatorError(
+      `Could not read ${SECRETS.dbKey}: ${vaultProblemHint(problem)}.\n` +
+      '  Not creating a new cache key - that would orphan the local cache.\n' +
+      '  Fix the password, then retry:  export PSST_PASSWORD=...  (or: psst run tg ...)'
+    )
+  }
 
   const key = randomBytes(32).toString('base64url')
   writeSecret(SECRETS.dbKey, key)

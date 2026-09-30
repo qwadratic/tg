@@ -4,7 +4,7 @@ import { ensureAuthenticated, ensureAuthenticatedQr, checkSession } from '../aut
 import { createClient } from '../client.js'
 import { acquireLock } from './lock.js'
 import { OperatorError } from '../errors.js'
-import { SESSION_DB_PATH } from './cache.js'
+import { cacheOpensWith, quarantineCache, SESSION_DB_PATH } from './cache.js'
 import { deleteSecret, getOrCreateDbKey, psstAvailable, readSecret, writeSecret, SECRETS } from './psst.js'
 import {
   isExpired,
@@ -168,7 +168,7 @@ export async function openSession(options: OpenSessionOptions = {}): Promise<Ses
   try {
     if (options.forceImport) resetLocalCache()
 
-    const hadCache = existsSync(SESSION_DB_PATH)
+    let hadCache = existsSync(SESSION_DB_PATH)
     const vaultSession = readSecret(SECRETS.session)
 
     // Nothing to authenticate with and nobody to ask: say so now rather than
@@ -176,6 +176,18 @@ export async function openSession(options: OpenSessionOptions = {}): Promise<Ses
     if (!hadCache && !vaultSession && !interactive) throw noSessionError()
 
     const cacheKey = getOrCreateDbKey()
+
+    // A cache encrypted with a key the vault no longer holds can never be read
+    // again, and used to stop every run with "Invalid session password". It is
+    // only a cache: the auth key is in the vault and peers re-resolve. Move it
+    // aside (not deleted) and carry on from the vault, or from a login.
+    if (hadCache && !cacheOpensWith(cacheKey)) {
+      const moved = quarantineCache()
+      console.error(`tg: the local cache did not open with this vault's ${SECRETS.dbKey}; moved it to ${moved} and starting a fresh one.`)
+      hadCache = false
+      if (!vaultSession && !interactive) throw noSessionError()
+    }
+
     const tg = createClient(cacheKey)
 
     try {
