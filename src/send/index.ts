@@ -5,6 +5,7 @@ import type { TelegramClient } from '@mtcute/node'
 import { OperatorError } from '../errors.js'
 import { assertPeerId } from '../peers/id.js'
 import { assertConfirmed, guardedSend, type SentRecord } from './gate.js'
+import { probeVideo, type VideoMeta } from '../media/probe.js'
 
 /**
  * The ONLY module in `src/` that calls a Telegram write RPC.
@@ -85,6 +86,33 @@ export function mediaKindFor(path: string): 'photo' | 'video' | 'document' {
   return 'document'
 }
 
+/**
+ * The sendMedia input for one file. Pure, so what reaches Telegram is testable
+ * without a client.
+ *
+ * A video carries its display width, height and duration when ffprobe could
+ * read them (src/media/probe.ts). Without them Telegram gets a 0x0 video
+ * attribute and clients draw a square player, stretching a 16:10 recording
+ * into it. `meta` null (no ffprobe, unreadable file) sends as before.
+ */
+export function mediaInput(
+  kind: 'photo' | 'video' | 'document',
+  file: Uint8Array,
+  fileName: string,
+  options: SendMediaOptions,
+  meta: VideoMeta | null
+) {
+  return {
+    type: kind,
+    file,
+    fileName,
+    ...(kind === 'video' ? { supportsStreaming: true } : {}),
+    ...(kind === 'video' && meta ? { width: meta.width, height: meta.height, ...(meta.duration ? { duration: meta.duration } : {}) } : {}),
+    ...(options.mime ? { fileMime: options.mime } : {}),
+    ...(options.caption ? { caption: options.caption } : {})
+  }
+}
+
 /** Send a file to a numeric peer id. */
 export async function sendMedia(
   tg: TelegramClient,
@@ -101,21 +129,13 @@ export async function sendMedia(
   const kind = mediaKindFor(filePath)
   const peer = await tg.resolvePeer(peerId)
 
+  // ponytail: no thumbnail yet — Telegram shows the first frame. Width, height
+  // and duration come from ffprobe when it is installed (optional, never a
+  // dependency of sending); see mediaInput.
+  const meta = kind === 'video' ? probeVideo(filePath) : null
+
   return guardedSend(peerId, kind, file.length, () =>
-    tg.sendMedia(peer, {
-      type: kind,
-      file,
-      fileName: basename(filePath),
-      // ponytail: no width/height/duration, so the client reads them from the
-      // file itself. Telegram still renders a player; the only cost is that the
-      // bubble may size itself once the header is parsed. Upgrade path if a
-      // thumbnail or exact aspect ratio ever matters: probe with ffprobe and
-      // pass width/height/duration/thumb - which would make ffmpeg a dependency
-      // of sending, so it is not worth it until something needs it.
-      ...(kind === 'video' ? { supportsStreaming: true } : {}),
-      ...(options.mime ? { fileMime: options.mime } : {}),
-      ...(options.caption ? { caption: options.caption } : {})
-    })
+    tg.sendMedia(peer, mediaInput(kind, file, basename(filePath), options, meta))
   )
 }
 
