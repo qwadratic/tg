@@ -28,6 +28,7 @@ import {
 import { describePeer, parsePeerRef, resolvePeerRef, type ResolvedPeer } from '../../peers/ref.js'
 import { runCommand } from '../errors.js'
 import { OperatorError } from '../../errors.js'
+import { EXIT } from '../../exit-codes.js'
 import { canPrompt } from '../../session/index.js'
 import { logSummary } from '../log.js'
 import { withAuthenticatedClient } from './shared.js'
@@ -112,6 +113,15 @@ function report(record: SentRecord, json = false): void {
   logSummary(`sent ${record.kind} to ${record.peerId} as message ${record.messageId}`)
 }
 
+/** `--topic`: a forum topic id, which is its top message id. */
+function parseTopicId(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined
+  if (!/^\d+$/.test(raw.trim()) || Number(raw) <= 0) {
+    throw new OperatorError(`Not a topic id: ${raw}. Ids are positive integers.`, EXIT.usage)
+  }
+  return Number(raw)
+}
+
 /** Every send subcommand carries these two; the rest are per-command. */
 interface SendFlags { yes?: boolean; json?: boolean }
 
@@ -124,16 +134,19 @@ export function registerSendCommand(program: Command): void {
   send
     .command('text <peer> <text>')
     .description('Send a text message (id, @username or t.me link)')
+    .option('--topic <topicId>', 'Post into this forum topic (its top message id)')
     .option('--yes', 'Skip the recipient confirmation; required for unattended runs')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string, text: string, options: SendFlags) => {
+    .action(async (peer: string, text: string, options: SendFlags & { topic?: string }) => {
       await runCommand(async () => {
         parsePeerRef(peer)
         assertConfirmed(options)
+        const topicId = parseTopicId(options.topic)
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
-          if (!(await confirmRecipient(target, 'send a text message', Boolean(options.yes)))) return
-          report(await sendText(tg, target.id, text, { yes: options.yes }), Boolean(options.json))
+          const what = topicId === undefined ? 'send a text message' : `send a text message into topic ${topicId}`
+          if (!(await confirmRecipient(target, what, Boolean(options.yes)))) return
+          report(await sendText(tg, target.id, text, { yes: options.yes, topicId }), Boolean(options.json))
         })
       })
     })
@@ -143,19 +156,23 @@ export function registerSendCommand(program: Command): void {
     .description('Send a file (id, @username or t.me link)')
     .option('--caption <text>', 'Caption for the file')
     .option('--mime <type>', 'Override the detected mime type')
+    .option('--topic <topicId>', 'Post into this forum topic (its top message id)')
     .option('--yes', 'Skip the recipient confirmation; required for unattended runs')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string, file: string, options: SendFlags & { caption?: string; mime?: string }) => {
+    .action(async (peer: string, file: string, options: SendFlags & { caption?: string; mime?: string; topic?: string }) => {
       await runCommand(async () => {
         parsePeerRef(peer)
         assertConfirmed(options)
+        const topicId = parseTopicId(options.topic)
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
-          if (!(await confirmRecipient(target, `send the file ${file}`, Boolean(options.yes)))) return
+          const what = topicId === undefined ? `send the file ${file}` : `send the file ${file} into topic ${topicId}`
+          if (!(await confirmRecipient(target, what, Boolean(options.yes)))) return
           report(
             await sendMedia(tg, target.id, file, {
               caption: options.caption,
               mime: options.mime,
+              topicId,
               yes: options.yes
             }),
             Boolean(options.json)

@@ -50,6 +50,9 @@ export interface SentRecord {
     | 'chat-sticker-set' | 'chat-username'
     | 'invite-link' | 'forum-topic'
     | 'slow-mode' | 'content-protection' | 'join-requests' | 'join-to-send'
+    // Membership and destruction (D13d). Unlike every verb above, these act on
+    // a PERSON or destroy a chat outright rather than changing a setting.
+    | 'add-member' | 'kick-member' | 'delete-chat'
   /**
    * Message id on success, null on failure. For a delete, the first id removed;
    * for a forward, the first message created in the destination chat; for an
@@ -70,6 +73,8 @@ export interface SentRecord {
    * caps exist to bound DELIVERED messages, not RPC calls.
    */
   units?: number
+  /** The forum topic a text or media send was posted into, when `--topic` was given. */
+  topicId?: number
   ok: boolean
   error?: string
 }
@@ -178,7 +183,7 @@ export async function guardedSend(
   kind: SentRecord['kind'],
   size: number,
   rpc: () => Promise<{ id: number }>,
-  extra: { units?: number; fromPeerId?: number } = {}
+  extra: { units?: number; fromPeerId?: number; topicId?: number } = {}
 ): Promise<SentRecord> {
   const units = extra.units ?? 1
   assertUnderCaps(units)
@@ -189,6 +194,7 @@ export async function guardedSend(
     kind,
     size,
     ...(extra.fromPeerId === undefined ? {} : { fromPeerId: extra.fromPeerId }),
+    ...(extra.topicId === undefined ? {} : { topicId: extra.topicId }),
     ...(units === 1 ? {} : { units })
   }
 

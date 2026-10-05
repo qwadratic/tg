@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
-import type { TelegramClient } from '@mtcute/node'
+import { tl, type TelegramClient } from '@mtcute/node'
 import { OperatorError } from '../errors.js'
+import { EXIT } from '../exit-codes.js'
 import { assertPeerId } from '../peers/id.js'
 import { assertConfirmed, guardedSend, type SentRecord } from './gate.js'
 import { probeVideo, type VideoMeta } from '../media/probe.js'
@@ -53,18 +54,41 @@ export async function sendText(
   tg: TelegramClient,
   rawPeer: string | number,
   text: string,
-  options: SendTextOptions = {}
+  options: SendTextOptions & TopicOption = {}
 ): Promise<SentRecord> {
   const peerId = assertPeerId(rawPeer)
   assertConfirmed(options)
+  if (options.topicId !== undefined) assertTopicId(options.topicId)
 
   if (!text.trim()) throw new OperatorError('Refusing to send an empty message.')
 
   const peer = await tg.resolvePeer(peerId)
-  return guardedSend(peerId, 'text', text.length, () => tg.sendText(peer, text))
+  return guardedSend(peerId, 'text', text.length, async () => {
+    try {
+      return await tg.sendText(peer, text, topicParams(options))
+    } catch (error) {
+      throw friendlyTelegramError(error)
+    }
+  }, topicExtra(options))
 }
 
-export interface SendMediaOptions extends SendTextOptions {
+/**
+ * Post into a forum topic. In a forum a topic IS its top message, so mtcute
+ * spells "into topic N" as a reply to message N.
+ */
+export interface TopicOption {
+  topicId?: number | undefined
+}
+
+function topicParams(options: TopicOption): { replyTo?: number } {
+  return options.topicId === undefined ? {} : { replyTo: options.topicId }
+}
+
+function topicExtra(options: TopicOption): { topicId?: number } {
+  return options.topicId === undefined ? {} : { topicId: options.topicId }
+}
+
+export interface SendMediaOptions extends SendTextOptions, TopicOption {
   caption?: string | undefined
   /** Override the detected mime type. */
   mime?: string | undefined
@@ -122,6 +146,7 @@ export async function sendMedia(
 ): Promise<SentRecord> {
   const peerId = assertPeerId(rawPeer)
   assertConfirmed(options)
+  if (options.topicId !== undefined) assertTopicId(options.topicId)
 
   if (!existsSync(filePath)) throw new OperatorError(`No such file: ${filePath}`)
 
@@ -134,9 +159,13 @@ export async function sendMedia(
   // dependency of sending); see mediaInput.
   const meta = kind === 'video' ? probeVideo(filePath) : null
 
-  return guardedSend(peerId, kind, file.length, () =>
-    tg.sendMedia(peer, mediaInput(kind, file, basename(filePath), options, meta))
-  )
+  return guardedSend(peerId, kind, file.length, async () => {
+    try {
+      return await tg.sendMedia(peer, mediaInput(kind, file, basename(filePath), options, meta), topicParams(options))
+    } catch (error) {
+      throw friendlyTelegramError(error)
+    }
+  }, topicExtra(options))
 }
 
 /**
@@ -900,6 +929,205 @@ export async function setJoinToSend(
 
   return guardedSend(peerId, 'join-to-send', 0, async () => {
     await tg.toggleJoinToSend(peerId, enabled)
+    return { id: 0 }
+  }, { units: 0 })
+}
+
+/**
+ * Membership and destruction (D13d).
+ *
+ * Unlike every verb above these act on a PERSON, or destroy a chat outright.
+ * Still zero cap units (they deliver no message), still behind the confirmation
+ * gate and the audit log; the real backstops are the 20-user batch cap, the
+ * stop-on-flood rule and, for deletion, the ownership check.
+ */
+
+/** Telegram errors this CLI has learned by name, as an OperatorError with the right exit code. Anything else passes through. */
+export function friendlyTelegramError(error: unknown): unknown {
+  if (!(error instanceof Error)) return error
+  if (tl.RpcError.is(error, 'FLOOD_WAIT_%d')) {
+    return new OperatorError(
+      `Telegram asked us to wait ${error.seconds}s before trying again. Not a bug: retry after that.`,
+      EXIT.upstream
+    )
+  }
+  if (tl.RpcError.is(error, 'PEER_FLOOD')) {
+    return new OperatorError(
+      'Telegram is throttling this account for too many requests. Wait a while before retrying.',
+      EXIT.upstream
+    )
+  }
+  if (tl.RpcError.is(error, 'CHAT_ADMIN_REQUIRED')) {
+    return new OperatorError(
+      'This account is not an admin in that chat, so Telegram refused. A human must grant admin rights first.',
+      EXIT.needsHuman
+    )
+  }
+  if (tl.RpcError.is(error, 'CHANNEL_FORUM_MISSING')) {
+    return new OperatorError(
+      'That chat is not a forum, so it has no topics. Create it with --forum, or drop --topic.',
+      EXIT.usage
+    )
+  }
+  if (tl.RpcError.is(error, 'TOPIC_CLOSED')) {
+    return new OperatorError(
+      'That topic is closed. Reopen it first: tg group topic-closed <chat> <topicId> off',
+      EXIT.usage
+    )
+  }
+  return error
+}
+
+/** The most users one `add-members` call will touch. */
+export const MAX_MEMBERS_PER_CALL = 20
+
+export type AddMemberFailureReason =
+  | 'privacy' | 'not_mutual' | 'flood' | 'too_many_channels' | 'already_member' | 'other'
+
+export interface AddMemberFailure {
+  user: number
+  reason: AddMemberFailureReason
+  message: string
+}
+
+export interface AddMembersResult {
+  added: number[]
+  failed: AddMemberFailure[]
+}
+
+const INVITE_HINT = 'Share an invite link instead: tg group invite-new <chat>'
+
+/** Map one thrown error to a stable reason code. `stop` means: do not keep hammering Telegram. */
+function classifyAddFailure(error: unknown): { reason: AddMemberFailureReason; message: string; stop: boolean } {
+  if (tl.RpcError.is(error, 'FLOOD_WAIT_%d')) {
+    return { reason: 'flood', message: `Telegram asked us to wait ${error.seconds}s.`, stop: true }
+  }
+  if (tl.RpcError.is(error, 'PEER_FLOOD')) {
+    return { reason: 'flood', message: 'Telegram is throttling this account for too many requests.', stop: true }
+  }
+  if (tl.RpcError.is(error, 'USER_PRIVACY_RESTRICTED')) {
+    return { reason: 'privacy', message: `The user's privacy settings forbid being added. ${INVITE_HINT}`, stop: false }
+  }
+  if (tl.RpcError.is(error, 'USER_NOT_MUTUAL_CONTACT')) {
+    return { reason: 'not_mutual', message: `Not a mutual contact. ${INVITE_HINT}`, stop: false }
+  }
+  if (tl.RpcError.is(error, 'USER_CHANNELS_TOO_MUCH')) {
+    return { reason: 'too_many_channels', message: 'This user is already in too many groups and channels.', stop: false }
+  }
+  if (tl.RpcError.is(error, 'USER_ALREADY_PARTICIPANT')) {
+    return { reason: 'already_member', message: 'Already a member.', stop: false }
+  }
+  if (tl.RpcError.is(error, 'CHAT_ADMIN_REQUIRED')) {
+    return { reason: 'other', message: 'This account is not an admin in that chat.', stop: false }
+  }
+  return { reason: 'other', message: error instanceof Error ? error.message : String(error), stop: false }
+}
+
+/**
+ * Add people to a chat, one at a time.
+ *
+ * One RPC per user so that one refusal cannot hide the others' outcome; each is
+ * its own audit line. Never throws for a per-user refusal: the result lists who
+ * was added and who was not, with a stable reason. A flood signal stops the
+ * batch, and the users not yet tried are reported as `flood`, not retried.
+ */
+export async function addChatMembers(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  userIds: number[],
+  options: AdminOptions = {}
+): Promise<AddMembersResult> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  if (userIds.length === 0) throw new OperatorError('Give at least one user id to add.', EXIT.usage)
+  if (userIds.length > MAX_MEMBERS_PER_CALL) {
+    throw new OperatorError(
+      `Too many users (${userIds.length}). Add at most ${MAX_MEMBERS_PER_CALL} per call.`,
+      EXIT.usage
+    )
+  }
+  const users = userIds.map((id) => assertPeerId(id))
+
+  const added: number[] = []
+  const failed: AddMemberFailure[] = []
+  let stopped = false
+
+  for (const user of users) {
+    if (stopped) {
+      failed.push({ user, reason: 'flood', message: 'Skipped: an earlier attempt in this batch hit a flood limit.' })
+      continue
+    }
+    let missing = false
+    try {
+      await guardedSend(peerId, 'add-member', 0, async () => {
+        const result = await tg.addChatMembers(peerId, [user], {})
+        missing = result.length > 0
+        return { id: user }
+      }, { units: 0 })
+      if (missing) {
+        failed.push({ user, reason: 'privacy', message: `The user's privacy settings forbid being added. ${INVITE_HINT}` })
+      } else {
+        added.push(user)
+      }
+    } catch (error) {
+      const { reason, message, stop } = classifyAddFailure(error)
+      failed.push({ user, reason, message })
+      if (stop) stopped = true
+    }
+  }
+
+  return { added, failed }
+}
+
+/** Remove one person from a chat (they may rejoin). */
+export async function kickChatMember(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  rawUser: string | number,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  const userId = assertPeerId(rawUser)
+
+  return guardedSend(peerId, 'kick-member', 0, async () => {
+    try {
+      const message = await tg.kickChatMember({ chatId: peerId, userId })
+      return { id: message?.id ?? 0 }
+    } catch (error) {
+      throw friendlyTelegramError(error)
+    }
+  }, { units: 0 })
+}
+
+/**
+ * Delete a supergroup or channel for everyone. Irreversible.
+ *
+ * Only a chat this account created: checked first, refused otherwise. The check
+ * is a read, so a refusal is not logged as a write attempt.
+ */
+export async function deleteChat(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+
+  const chat = await tg.getChat(peerId)
+  if (!chat.isCreator) {
+    throw new OperatorError(
+      `Refusing to delete ${peerId}: this account did not create it. Only a chat you own can be deleted here.`,
+      EXIT.usage
+    )
+  }
+
+  return guardedSend(peerId, 'delete-chat', 0, async () => {
+    try {
+      await tg.deleteChannel(peerId)
+    } catch (error) {
+      throw friendlyTelegramError(error)
+    }
     return { id: 0 }
   }, { units: 0 })
 }
