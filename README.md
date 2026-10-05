@@ -260,6 +260,7 @@ hard to fire by accident.
 | --- | --- |
 | `send text <peer> <text>` | send a message |
 | `send media <peer> <file> [--caption ...]` | send a file |
+| `--topic <topicId>` on `send text` / `send media` | post into a forum topic (the topic id is its top message id) |
 | `send rm <peer> <ids...>` | delete messages you sent, for everyone |
 | `send forward <peer> <ids...> --to <target>` | forward messages into another chat |
 | `send edit <peer> <id> <text>` | edit the text of a message you sent |
@@ -328,6 +329,9 @@ confirmation prompt (or `--yes`), and a line in `data/sent.jsonl`.
 | `group protect <peer> <on\|off>` | restrict saving and forwarding content |
 | `group join-requests <peer> <on\|off>` | require admin approval to join by link |
 | `group join-to-send <peer> <on\|off>` | require joining before posting |
+| `group add-members <peer> <ids...>` | add people, numeric ids only, at most 20 per call |
+| `group kick-member <peer> <id>` | remove one person (they may rejoin) |
+| `group delete <peer>` | delete a supergroup or channel you created, irreversible |
 
 Two of these do not come back:
 
@@ -338,9 +342,22 @@ Two of these do not come back:
 
 `color` takes Telegram's own palette **index**, not an RGB value: `0-6` are the
 built-in red, orange, purple, green, sea, blue, pink, and higher ids come from
-the server's app config. Membership verbs (add, kick, ban, restrict) and admin
-rights are deliberately **not** here — see
-`backlog/decisions/2026-08-31-widen-the-fenced-write-verbs-to-group-channel-management.md`.
+the server's app config.
+
+`add-members` adds people one at a time and reports each outcome. With `--json`
+it prints `{"ok": true, "added": [ids], "failed": [{"user", "reason", "message"}]}`
+and exits 0 even when some users could not be added. `reason` is one of
+`privacy`, `not_mutual`, `flood`, `too_many_channels`, `already_member`, `other`.
+A privacy block is not an error to retry: use `group invite-new` and share the
+link. A flood limit stops the batch; the users not yet tried come back as
+`flood`. `delete` refuses unless this account created the chat. Ban, restrict,
+unban and admin rights are still **not** here — see
+`backlog/decisions/2026-08-31-widen-the-fenced-write-verbs-to-group-channel-management.md`
+and `backlog/decisions/2026-10-05-widen-the-fenced-write-verbs-to-membership-and-deletion.md`.
+
+Telegram refusals map to readable messages and exit codes: `CHAT_ADMIN_REQUIRED`
+is 3 (a human must grant admin), `CHANNEL_FORUM_MISSING` and `TOPIC_CLOSED` are 2,
+`FLOOD_WAIT` and `PEER_FLOOD` are 6.
 
 ## Sessions
 

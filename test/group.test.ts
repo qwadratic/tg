@@ -3,16 +3,22 @@ import test from 'node:test'
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Message, TelegramClient } from '@mtcute/node'
+import { tl, type Message, type TelegramClient } from '@mtcute/node'
 import {
+  addChatMembers,
   createChannel,
   createForumTopic,
   createGroup,
   createInviteLink,
   createSupergroup,
+  deleteChat,
   editForumTopic,
   editInviteLink,
   exportInviteLink,
+  friendlyTelegramError,
+  kickChatMember,
+  sendMedia,
+  sendText,
   setChatColor,
   setChatDescription,
   setChatPhoto,
@@ -26,6 +32,8 @@ import {
   setJoinToSend,
   setSlowMode
 } from '../src/send/index.js'
+import { EXIT } from '../src/exit-codes.js'
+import { OperatorError } from '../src/errors.js'
 import { readSendLog, resetRunCounter, sendsToday } from '../src/send/gate.js'
 import {
   listForumTopics,
@@ -377,4 +385,182 @@ test('eval-139 a dump surfaces engagement only where Telegram populates it', () 
     ]),
     '[2026-08-01T10:00] Ada: hi\n[2026-08-01T10:01] Ada: post (9 views)\n'
   )
+})
+
+/** Membership, deletion and topic posting (D13d): mocked client, never the network. */
+function rpc(text: string, code = 400): Error {
+  return tl.RpcError.fromTl({ errorCode: code, errorMessage: text })
+}
+
+test('eval-142 add-members reports each user separately with a stable reason', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const outcomes: Record<number, () => unknown> = {
+      1: () => [],
+      2: () => { throw rpc('USER_PRIVACY_RESTRICTED', 403) },
+      3: () => { throw rpc('USER_NOT_MUTUAL_CONTACT') },
+      4: () => { throw rpc('USER_CHANNELS_TOO_MUCH') },
+      5: () => { throw rpc('USER_ALREADY_PARTICIPANT') },
+      6: () => [{ _: 'missingInvitee', userId: 6 }],
+      7: () => { throw new Error('socket hang up') }
+    }
+    const tg = {
+      addChatMembers: (_chat: number, users: number[]) => Promise.resolve().then(() => outcomes[users[0]!]!())
+    } as unknown as TelegramClient
+
+    const result = await addChatMembers(tg, CHAT, [1, 2, 3, 4, 5, 6, 7], YES)
+    assert.deepEqual(result.added, [1])
+    assert.deepEqual(result.failed.map((f) => [f.user, f.reason]), [
+      [2, 'privacy'], [3, 'not_mutual'], [4, 'too_many_channels'],
+      [5, 'already_member'], [6, 'privacy'], [7, 'other']
+    ])
+    assert.match(result.failed[0]!.message, /tg group invite-new/, 'a privacy block points at invite links')
+    assert.equal(sendsToday(readSendLog()), 0, 'membership costs no send budget')
+    assert.equal(readSendLog().length, 7, 'one audit line per user')
+  })
+})
+
+test('eval-143 a flood limit stops the batch and the rest are reported, not retried', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const tried: number[] = []
+    const tg = {
+      addChatMembers: (_chat: number, users: number[]) => {
+        tried.push(users[0]!)
+        return users[0] === 2 ? Promise.reject(rpc('FLOOD_WAIT_30', 420)) : Promise.resolve([])
+      }
+    } as unknown as TelegramClient
+
+    const result = await addChatMembers(tg, CHAT, [1, 2, 3, 4], YES)
+    assert.deepEqual(tried, [1, 2], 'nothing is attempted after the flood')
+    assert.deepEqual(result.added, [1])
+    assert.deepEqual(result.failed.map((f) => [f.user, f.reason]), [[2, 'flood'], [3, 'flood'], [4, 'flood']])
+  })
+})
+
+test('eval-144 add-members caps a call at 20 users and refuses before the network', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const calls: unknown[] = []
+    const tg = { addChatMembers: (...a: unknown[]) => { calls.push(a); return Promise.resolve([]) } } as unknown as TelegramClient
+    const ids = Array.from({ length: 21 }, (_, i) => i + 1)
+
+    await assert.rejects(() => addChatMembers(tg, CHAT, ids, YES), (e: unknown) =>
+      e instanceof OperatorError && e.exitCode === EXIT.usage && /at most 20/.test(e.message))
+    await assert.rejects(() => addChatMembers(tg, CHAT, [], YES), /at least one/)
+    await assert.rejects(() => addChatMembers(tg, CHAT, ['@durov' as unknown as number], YES), /Not a numeric peer id/)
+    assert.deepEqual(calls, [])
+
+    await addChatMembers(tg, CHAT, ids.slice(0, 20), YES)
+    assert.equal(calls.length, 20)
+  })
+})
+
+test('eval-145 kick-member and delete go through the gate, and delete only for an owner', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const calls: [string, unknown][] = []
+    let creator = false
+    const tg = {
+      kickChatMember: (p: unknown) => { calls.push(['kick', p]); return Promise.resolve(null) },
+      getChat: () => Promise.resolve({ isCreator: creator }),
+      deleteChannel: (id: number) => { calls.push(['delete', id]); return Promise.resolve() }
+    } as unknown as TelegramClient
+
+    const kicked = await kickChatMember(tg, CHAT, 42, YES)
+    assert.deepEqual(calls[0], ['kick', { chatId: CHAT, userId: 42 }])
+    assert.equal(kicked.kind, 'kick-member')
+    await assert.rejects(() => kickChatMember(tg, CHAT, '@durov', YES), /Not a numeric peer id/)
+
+    await assert.rejects(() => deleteChat(tg, CHAT, YES), (e: unknown) =>
+      e instanceof OperatorError && e.exitCode === EXIT.usage && /did not create/.test(e.message))
+    assert.equal(calls.length, 1, 'a chat you do not own is never deleted')
+
+    creator = true
+    const deleted = await deleteChat(tg, CHAT, YES)
+    assert.deepEqual(calls[1], ['delete', CHAT])
+    assert.equal(deleted.kind, 'delete-chat')
+    assert.equal(sendsToday(readSendLog()), 0)
+  })
+})
+
+test('eval-146 without --yes and without a terminal, membership verbs refuse with exit 3', async () => {
+  const original = process.env.TG_NON_INTERACTIVE
+  process.env.TG_NON_INTERACTIVE = '1'
+  try {
+    const tg = {} as unknown as TelegramClient
+    const needsHuman = (e: unknown) => e instanceof OperatorError && e.exitCode === EXIT.needsHuman
+    await assert.rejects(() => addChatMembers(tg, CHAT, [1], {}), needsHuman)
+    await assert.rejects(() => kickChatMember(tg, CHAT, 1, {}), needsHuman)
+    await assert.rejects(() => deleteChat(tg, CHAT, {}), needsHuman)
+  } finally {
+    if (original === undefined) delete process.env.TG_NON_INTERACTIVE
+    else process.env.TG_NON_INTERACTIVE = original
+  }
+})
+
+test('eval-147 Telegram errors map to readable messages and the repo exit codes', () => {
+  const cases: [string, number, RegExp][] = [
+    ['CHAT_ADMIN_REQUIRED', EXIT.needsHuman, /not an admin/],
+    ['CHANNEL_FORUM_MISSING', EXIT.usage, /not a forum/],
+    ['TOPIC_CLOSED', EXIT.usage, /topic is closed/],
+    ['FLOOD_WAIT_12', EXIT.upstream, /wait 12s/],
+    ['PEER_FLOOD', EXIT.upstream, /throttling/]
+  ]
+  for (const [text, exit, message] of cases) {
+    const mapped = friendlyTelegramError(rpc(text, text.startsWith('FLOOD') ? 420 : 400))
+    assert.ok(mapped instanceof OperatorError, text)
+    assert.equal(mapped.exitCode, exit, text)
+    assert.match(mapped.message, message)
+  }
+  const unknown = new Error('boom')
+  assert.equal(friendlyTelegramError(unknown), unknown, 'anything unknown stays a bug with its stack')
+})
+
+test('eval-148 --topic posts as a reply to the topic and is logged', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    writeFileSync('a.png', 'x', 'utf-8')
+    const calls: [string, unknown][] = []
+    let failWith: Error | null = null
+    const tg = {
+      resolvePeer: () => Promise.resolve({}),
+      sendText: (_p: unknown, _t: string, params: unknown) => {
+        calls.push(['text', params])
+        return failWith ? Promise.reject(failWith) : Promise.resolve({ id: 9 })
+      },
+      sendMedia: (_p: unknown, _m: unknown, params: unknown) => {
+        calls.push(['media', params])
+        return Promise.resolve({ id: 10 })
+      }
+    } as unknown as TelegramClient
+
+    const record = await sendText(tg, CHAT, 'hi', { ...YES, topicId: 77 })
+    assert.deepEqual(calls[0], ['text', { replyTo: 77 }])
+    assert.equal(record.topicId, 77)
+    await sendMedia(tg, CHAT, 'a.png', { ...YES, topicId: 77 })
+    assert.deepEqual(calls[1], ['media', { replyTo: 77 }])
+
+    // Without --topic nothing changes: no replyTo, no topicId in the log.
+    const plain = await sendText(tg, CHAT, 'hi', YES)
+    assert.deepEqual(calls[2], ['text', {}])
+    assert.equal('topicId' in plain, false)
+
+    await assert.rejects(() => sendText(tg, CHAT, 'hi', { ...YES, topicId: 0 }), /Not a topic id/)
+
+    failWith = rpc('CHANNEL_FORUM_MISSING')
+    await assert.rejects(() => sendText(tg, CHAT, 'hi', { ...YES, topicId: 77 }), (e: unknown) =>
+      e instanceof OperatorError && e.exitCode === EXIT.usage && /not a forum/.test(e.message))
+    failWith = rpc('TOPIC_CLOSED')
+    await assert.rejects(() => sendText(tg, CHAT, 'hi', { ...YES, topicId: 77 }), /topic is closed/)
+  })
+})
+
+test('eval-149 the send command exposes --topic on text and media only', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/cli/commands/send.ts', import.meta.url)),
+    'utf-8'
+  )
+  assert.equal([...source.matchAll(/--topic <topicId>/g)].length, 2)
+  assert.ok(!/(sendText|sendMedia)\(tg,\s*peer\b/.test(source))
 })

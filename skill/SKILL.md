@@ -181,12 +181,25 @@ tg group slow-mode <peer> 30             # 0 disables
 tg group protect <peer> on               # restrict saving content
 tg group join-requests <peer> on
 tg group join-to-send <peer> on
+tg group add-members <peer> <id> <id>     # numeric ids, max 20; per-user result
+tg group kick-member <peer> <id>
+tg group delete <peer>                    # only a chat you created; irreversible
 ```
+
+To post into a forum topic, add `--topic <topicId>` to `tg send text` or `tg send media`.
 
 Two are not reversible: `tg group invite-export` breaks every copy of the old
 primary link, and `tg group remove-username` returns the handle to the global
-pool. Membership (add/kick/ban/restrict) and admin rights are NOT implemented -
-do not try to reach them another way.
+pool; `delete` cannot be undone either. Ban, restrict and admin rights are NOT
+implemented - do not try to reach them another way.
+
+`add-members --json` returns `{ok, added, failed:[{user, reason, message}]}` and
+exits 0 on partial failure: read `failed`. Reasons: `privacy`, `not_mutual`,
+`flood`, `too_many_channels`, `already_member`, `other`. Privacy and not_mutual
+are not retryable: create a link with `tg group invite-new <peer>` and give it to
+the operator to share. Never loop over many users: invite one by one at human
+pace, prefer invite links, and on `flood` stop. Exit codes for Telegram refusals:
+3 `CHAT_ADMIN_REQUIRED` (ask a human), 2 not a forum or closed topic, 6 flood.
 
 ## Hard rules — these are enforced, not advisory
 

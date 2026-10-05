@@ -112,7 +112,11 @@ const WRITE_RPCS = [
   'setSlowMode',
   'toggleContentProtection',
   'toggleJoinRequests',
-  'toggleJoinToSend'
+  'toggleJoinToSend',
+  // Membership and destruction (D13d).
+  'addChatMembers',
+  'kickChatMember',
+  'deleteChannel'
 ] as const
 
 /**

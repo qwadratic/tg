@@ -2,14 +2,18 @@ import { confirm, isCancel } from '@clack/prompts'
 import chalk from 'chalk'
 import type { Command } from 'commander'
 import {
+  addChatMembers,
   createChannel,
   createForumTopic,
   createGroup,
   createInviteLink,
   createSupergroup,
+  deleteChat,
   editForumTopic,
   editInviteLink,
   exportInviteLink,
+  kickChatMember,
+  MAX_MEMBERS_PER_CALL,
   setChatColor,
   setChatDescription,
   setChatPhoto,
@@ -49,6 +53,9 @@ import { withAuthenticatedClient } from './shared.js'
  * is organised - which is visible to every member and, for a released username
  * or a regenerated primary invite link, not undoable. See
  * backlog/decisions/2026-08-31-widen-the-fenced-write-verbs-to-group-channel-management.md
+ *
+ * D13d (backlog/decisions/2026-10-05-...) added add-members, kick-member and
+ * delete: they act on a person or destroy a chat, so their prompts name them.
  *
  * The write verbs share the send machinery exactly: numeric peer id, the --yes
  * gate before any session is opened, the audit log. They cost zero cap units,
@@ -91,6 +98,44 @@ async function confirmCreate(what: string, yes: boolean, details: string[] = [])
     return false
   }
   return true
+}
+
+/** Name the people about to be added; the chat is shown too. */
+async function confirmAddMembers(target: ResolvedPeer, members: string[], yes: boolean): Promise<boolean> {
+  if (yes || !canPrompt()) return true
+  console.log(chalk.yellow(`\nAbout to add ${members.length} member(s) to ${describePeer(target)}`))
+  for (const line of members) console.log(chalk.yellow(`  member: ${chalk.bold(line)}`))
+  const ok = await confirm({ message: 'Go ahead?' })
+  if (isCancel(ok) || !ok) {
+    console.log('Cancelled. Nothing was done.')
+    return false
+  }
+  return true
+}
+
+/** Membership acts on a PERSON, so the prompt names the person, not just the chat (D13d). */
+async function confirmKick(target: ResolvedPeer, member: string, yes: boolean): Promise<boolean> {
+  if (yes || !canPrompt()) return true
+  console.log(chalk.yellow(`\nAbout to remove this person from ${describePeer(target)}`))
+  console.log(chalk.yellow(`  member: ${chalk.bold(member)}`))
+  const ok = await confirm({ message: 'Go ahead?' })
+  if (isCancel(ok) || !ok) {
+    console.log('Cancelled. Nothing was done.')
+    return false
+  }
+  return true
+}
+
+/** A user to act on: numeric ids only, like create-group, so a typo cannot reach a stranger. */
+function parseUserId(raw: string): number {
+  const ref = parsePeerRef(raw)
+  if (ref.kind !== 'id' || typeof ref.value !== 'number') {
+    throw new OperatorError(
+      `Give numeric peer ids for people, not ${ref.raw}. Find one with: tg peers find <name> --id-only`,
+      EXIT.usage
+    )
+  }
+  return ref.value
 }
 
 function report(record: SentRecord, done: string, json = false): void {
@@ -723,6 +768,85 @@ export function registerGroupCommand(program: Command): void {
           report(
             await setJoinToSend(tg, target.id, enabled, { yes: options.yes }),
             `join-to-send ${enabled ? 'on' : 'off'} for ${target.id}`,
+            Boolean(options.json)
+          )
+        })
+      })
+    })
+
+  /* -------------------------------------------------- membership, destruction */
+
+  group
+    .command('add-members <peer> <users...>')
+    .description(`Add people to a chat (numeric user ids, at most ${MAX_MEMBERS_PER_CALL})`)
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, users: string[], options: GroupFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        if (users.length > MAX_MEMBERS_PER_CALL) {
+          throw new OperatorError(
+            `Too many users (${users.length}). Add at most ${MAX_MEMBERS_PER_CALL} per call.`,
+            EXIT.usage
+          )
+        }
+        const userIds = users.map((raw) => parseUserId(raw))
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          const members: string[] = []
+          for (const id of userIds) members.push(describePeer(await resolvePeerRef(tg, String(id))))
+          if (!(await confirmAddMembers(target, members, Boolean(options.yes)))) return
+          const result = await addChatMembers(tg, target.id, userIds, { yes: options.yes })
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`)
+            return
+          }
+          logSummary(`added ${result.added.length} of ${userIds.length} to ${target.id}`)
+          for (const f of result.failed) console.error(`  not added ${f.user} (${f.reason}): ${f.message}`)
+        })
+      })
+    })
+
+  group
+    .command('kick-member <peer> <user>')
+    .description('Remove one person from a chat (numeric user id); they may rejoin')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, user: string, options: GroupFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        const userId = parseUserId(user)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          const member = describePeer(await resolvePeerRef(tg, String(userId)))
+          if (!(await confirmKick(target, member, Boolean(options.yes)))) return
+          report(
+            await kickChatMember(tg, target.id, userId, { yes: options.yes }),
+            `removed ${userId} from ${target.id}`,
+            Boolean(options.json)
+          )
+        })
+      })
+    })
+
+  group
+    .command('delete <peer>')
+    .description('Delete a supergroup or channel YOU created, for everyone - irreversible')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, options: GroupFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          const what = 'PERMANENTLY DELETE this chat for every member - messages, media and members are gone'
+          if (!(await confirmChat(target, what, Boolean(options.yes)))) return
+          report(
+            await deleteChat(tg, target.id, { yes: options.yes }),
+            `deleted ${target.id}`,
             Boolean(options.json)
           )
         })
