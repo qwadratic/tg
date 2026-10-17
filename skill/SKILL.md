@@ -188,7 +188,7 @@ tg group members <peer> --type admins     # read-only: id, name, @handle, role, 
 tg group ban <peer> <id> [<id>...] [--until 2026-12-31]   # forever without --until
 tg group unban <peer> <id> [<id>...]      # lifts a ban or restrictions; does not re-add
 tg group restrict <peer> <id> --deny send-messages,send-media [--until <date>]
-tg group promote <peer> <id> --rights delete-messages,pin-messages [--rank "Mod"]
+tg group promote <peer> <id> --rights delete-messages,pin-messages [--rank "Mod"]   # TERMINAL ONLY: --yes does not bypass it
 tg group demote <peer> <id>
 ```
 
@@ -223,6 +223,19 @@ each right in `--rights`; there is no `all` and no ownership transfer, and it
 replaces the rights the person had. A refusal for any of these is the feature: do
 not add `--yes` to get past it, ask the operator.
 
+`promote` is **terminal-only**: it refuses a non-interactive run with exit 3 even
+when `--yes` is passed, and at a terminal it always asks. You cannot run it. Do not
+look for a way (a pty, another flag, a different verb): stop and
+ask the operator to run the command themselves. `demote` only removes rights and is
+not terminal-only.
+
+`add-members`, `kick-member`, `ban`, `unban`, `restrict`, `promote` and `demote` also
+share a daily moderation cap, one per person, 50 by default
+(`TG_MAX_MODERATION_PER_DAY`). Over it, a call is refused whole with exit 4 and
+`reason: "cap"` in the JSON. **Do not raise it**, and do not split a refused batch
+into smaller calls to get around it: tell the operator how many people are left to
+do. `tg send log` shows today's count.
+
 ## Hard rules — these are enforced, not advisory
 
 1. **Sending reaches a real person and cannot be undone.** `tg send` **and
@@ -230,10 +243,12 @@ not add `--yes` to get past it, ask the operator.
    group writes are behind the identical gate, and two of them (`invite-export`,
    `remove-username`) are irreversible. If a send was refused, that
    refusal is the feature: report it and ask the operator. Do not add `--yes` to
-   get past it.
-2. **Do not raise `TG_MAX_SENDS_PER_RUN` or `TG_MAX_SENDS_PER_DAY`** to push a
-   batch through. The caps exist because a burst of outbound messages from a
-   user account is what earns a report and a ban.
+   get past it. `group promote` is stricter still: no `--yes` makes it run
+   unattended, ever.
+2. **Do not raise `TG_MAX_SENDS_PER_RUN`, `TG_MAX_SENDS_PER_DAY` or
+   `TG_MAX_MODERATION_PER_DAY`** to push a batch through. The caps exist because
+   a burst of outbound messages, or of bans and adds, from a user account is what
+   earns a report and a ban.
 3. **Prefer a numeric id when you have one.** Handles are accepted, and
    `@durov` and `@durvo` are different real people. When you use a handle, read
    the resolved identity line back to the operator.
