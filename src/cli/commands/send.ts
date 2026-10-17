@@ -448,6 +448,8 @@ export function registerSendCommand(program: Command): void {
           const status = r.ok ? 'ok  ' : 'FAIL'
           console.log(
             `${r.at.slice(0, 16)}  ${status}  ${r.kind.padEnd(8)}  peer ${r.peerId}` +
+            `${r.targetUserId === undefined ? '' : `  user ${r.targetUserId}`}` +
+            `${r.detail ? `  ${r.detail}` : ''}` +
             `${r.error ? `  ${r.error}` : ''}`
           )
         }

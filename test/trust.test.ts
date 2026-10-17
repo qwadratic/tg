@@ -116,7 +116,18 @@ const WRITE_RPCS = [
   // Membership and destruction (D13d).
   'addChatMembers',
   'kickChatMember',
-  'deleteChannel'
+  'deleteChannel',
+  // Moderation and admin rights (D13e). Each acts on one PERSON.
+  'banChatMember',
+  'unbanChatMember',
+  'restrictChatMember',
+  'editAdminRights',
+  // NOT SHIPPED, fenced anyway. This list is a FENCE, not an inventory: a name
+  // with no call site costs nothing, and buys a suite failure the moment
+  // somebody adds an out-of-scope write outside src/send/. D13e keeps both of
+  // these out and says so.
+  'deleteGroup',
+  'setChatTtl'
 ] as const
 
 /**
@@ -232,7 +243,16 @@ test('eval-30 the unattended paths cannot reach the send module', () => {
 test('eval-31 the read verbs cannot reach the send module either', () => {
   // The point of splitting peers/id.ts out of send/: a read verb validates a
   // peer id without linking the code that can write.
-  for (const entry of ['cli/commands/dump.ts', 'cli/commands/media.ts', 'cli/commands/peers.ts', 'cli/commands/watch.ts']) {
+  // groups/index.ts is the read half of `tg group` (invite links, members,
+  // topics): `tg group members` lists people without linking the code that can
+  // ban or promote them.
+  for (const entry of [
+    'cli/commands/dump.ts',
+    'cli/commands/media.ts',
+    'cli/commands/peers.ts',
+    'cli/commands/watch.ts',
+    'groups/index.ts'
+  ]) {
     const closure = importClosure([entry])
     assert.deepEqual(
       [...closure].filter((f) => /\/send\/(index|gate)\.ts$/.test(f)).map((f) => f.slice(SRC.length)),
@@ -526,4 +546,24 @@ test('eval-113 an mp4 is sent as a playable video, a gif stays a photo', () => {
   assert.equal(mediaKindFor('archive'), 'document')
   assert.equal(mediaKindFor('mp4'), 'document')
   assert.equal(mediaKindFor('sneaky.mp4.zip'), 'document')
+})
+
+test('eval-163 the D13e write RPCs are called in src/send/index.ts and nowhere else', () => {
+  // The positive half of eval-29 for the moderation verbs: a fence naming a
+  // method nobody calls passes for the wrong reason. These four ship, so each
+  // must really be called from the send module, and only from there.
+  for (const rpc of ['banChatMember', 'unbanChatMember', 'restrictChatMember', 'editAdminRights']) {
+    assert.ok((WRITE_RPCS as readonly string[]).includes(rpc), `${rpc} is missing from WRITE_RPCS`)
+    const calling = sourceFiles()
+      .filter((file) => new RegExp(`\\.\\s*${rpc}\\s*\\(`).test(readFileSync(file, 'utf-8')))
+      .map((file) => file.slice(SRC.length))
+    assert.deepEqual(calling, ['send/index.ts'], `${rpc} must be called from src/send/index.ts only`)
+  }
+
+  // Out of scope in D13e: fenced, and not called anywhere.
+  for (const rpc of ['deleteGroup', 'setChatTtl']) {
+    assert.ok((WRITE_RPCS as readonly string[]).includes(rpc), `${rpc} must stay fenced`)
+    const calling = sourceFiles().filter((file) => new RegExp(`\\.\\s*${rpc}\\s*\\(`).test(readFileSync(file, 'utf-8')))
+    assert.deepEqual(calling, [], `${rpc} is out of scope and must not be called`)
+  }
 })
