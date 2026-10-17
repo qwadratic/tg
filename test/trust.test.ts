@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert'
 import test from 'node:test'
@@ -28,6 +28,20 @@ import { EXIT } from '../src/exit-codes.js'
 import { mediaFilename } from '../src/media/index.js'
 import { mediaKindFor } from '../src/send/index.js'
 import { seedModerationLog, withTempDir, withTerminal, withTerminalState, withoutTerminal } from './helpers.js'
+import {
+  aliasViolations,
+  clientUses,
+  closureOf,
+  findRawCalls,
+  importEdges,
+  importGraph,
+  loadSources,
+  rawCallViolations,
+  rawMethodsNamed,
+  type SourceText
+} from './fence-scan.js'
+import { clientMethodNames, tlRpcMethods } from './mtcute-api.js'
+import { CLIENT_METHODS, RAW_TL_METHODS, UNSUPPORTED_TL_PREFIXES, summarize } from './coverage-manifest.js'
 
 const SRC = fileURLToPath(new URL('../src/', import.meta.url))
 
@@ -53,34 +67,19 @@ function sourceFiles(dir = SRC): string[] {
   })
 }
 
-/** Transitive closure of relative imports from a set of entry points. */
+/** The whole of src/, parsed once: the fence checks below all read the same snapshot. */
+const SOURCES = loadSources()
+const GRAPH = importGraph(SOURCES)
+
+/**
+ * Transitive closure of imports from a set of entry points, as absolute paths.
+ *
+ * Built from the syntax tree (test/fence-scan.ts), so a side-effect import, an
+ * `export * from` and a dynamic `import('...')` are edges like any other. The
+ * text pattern this replaced saw only `from '...'`.
+ */
 function importClosure(entries: string[]): Set<string> {
-  const seen = new Set<string>()
-  const queue = entries.map((e) => resolve(SRC, e))
-
-  while (queue.length > 0) {
-    const file = queue.pop() as string
-    if (seen.has(file)) continue
-    seen.add(file)
-
-    let source: string
-    try {
-      source = readFileSync(file, 'utf-8')
-    } catch {
-      // A path that does not resolve to a file is a broken import, which tsc
-      // already fails on; nothing for this walk to add.
-      continue
-    }
-
-    for (const match of source.matchAll(/from\s+'([^']+)'/g)) {
-      // Group 1 is not optional in the pattern: a match always carries it.
-      const spec = match[1]!
-      if (!spec.startsWith('.')) continue
-      queue.push(resolve(dirname(file), spec.replace(/\.js$/, '.ts')))
-    }
-  }
-
-  return seen
+  return new Set([...closureOf(GRAPH.graph, entries)].map((path) => SRC + path))
 }
 
 /** Telegram RPCs that change state on someone else's screen. */
@@ -156,6 +155,19 @@ const WRITE_TL_METHODS = [
 ] as const
 
 /**
+ * The raw TL methods a READ verb may call outside `src/send/` (D13f).
+ *
+ * Before 0.8 any `tg.call({ _: '...' })` outside the send module was only caught
+ * if its method happened to be in `WRITE_TL_METHODS`: a raw twin of a write nobody
+ * had listed walked straight past, which D13c admitted. Now the rule runs the
+ * other way and denies by default (eval-175): a raw call outside the fence passes
+ * only if its method is on this list, and every entry must be a `get*` method of
+ * the schema. Adding a raw read means adding it here, in the manifest, and in the
+ * verb's tests.
+ */
+const READ_TL_METHODS: readonly string[] = []
+
+/**
  * Files permitted to name a write RPC, each with the reason it is fenced.
  *
  * `src/send/index.ts` is the whole point of the module: the single place a write
@@ -226,18 +238,65 @@ test('eval-29b the raw TL write methods are named in exactly one file', () => {
   }
 })
 
+/**
+ * What every command file under src/cli/commands/ is, said out loud (D13f).
+ *
+ * Until 0.8 eval-31 carried a hand-kept list of read entry points, so a new read
+ * verb was checked only if somebody remembered to add it. Now the files on disk
+ * are the list and each must be classified here, so a command file that is in no
+ * class fails the suite until somebody decides what it is:
+ *
+ * - `write`        may import the send module; also on WRITE_ALLOWLIST
+ * - `legacy-write` writes, but outside the fence (`check-phones`, D13's older exception)
+ * - `unattended`   what a cron job or timer runs; must not reach the send module
+ * - `read`         a read verb; must not reach the send module
+ * - `plumbing`     login, workspace and update commands, and shared helpers; must not
+ *                  reach the send module
+ *
+ * `group.ts` mixes reads and writes, so it is `write`: its reads are checked
+ * through the read modules it imports (src/groups/ and the new read modules), which
+ * the module-graph rule in eval-31 covers like every other file.
+ */
+const COMMAND_CLASS: Record<string, 'write' | 'legacy-write' | 'unattended' | 'read' | 'plumbing'> = {
+  'send.ts': 'write',
+  'group.ts': 'write',
+  'check-phones.ts': 'legacy-write',
+  'sync.ts': 'unattended',
+  'sync-chats.ts': 'unattended',
+  'sync-recent.ts': 'unattended',
+  'sync-historical.ts': 'unattended',
+  'recency-export.ts': 'unattended',
+  'folders.ts': 'unattended',
+  'ship.ts': 'unattended',
+  'dump.ts': 'read',
+  'media.ts': 'read',
+  'peers.ts': 'read',
+  'watch.ts': 'read',
+  'auth.ts': 'plumbing',
+  'session.ts': 'plumbing',
+  'init.ts': 'plumbing',
+  'doctor.ts': 'plumbing',
+  'update.ts': 'plumbing',
+  'shared.ts': 'plumbing'
+}
+
+/** The files allowed to import the send module, directly or through another file. */
+const WRITE_CAPABLE = ['cli/commands/group.ts', 'cli/commands/send.ts', 'index.ts', 'send/gate.ts', 'send/index.ts']
+
+const reachesSendModule = (path: string): boolean =>
+  [...closureOf(GRAPH.graph, [path])].some((f) => /^send\/(index|gate)\.ts$/.test(f))
+
+const commandPath = (name: string): string => `cli/commands/${name}`
+
 test('eval-30 the unattended paths cannot reach the send module', () => {
-  // Everything a cron job, timer or agent invokes without a human present.
+  // Everything a cron job, timer or agent invokes without a human present: the
+  // commands classified `unattended`, and the two modules they are built on.
   const unattended = [
-    'cli/commands/sync.ts',
-    'cli/commands/sync-chats.ts',
-    'cli/commands/sync-recent.ts',
-    'cli/commands/sync-historical.ts',
-    'cli/commands/folders.ts',
-    'cli/commands/ship.ts',
+    ...Object.entries(COMMAND_CLASS).filter(([, kind]) => kind === 'unattended').map(([name]) => commandPath(name)),
     'sync/index.ts',
     'ship/index.ts'
   ]
+  assert.ok(unattended.length >= 8, 'the list of unattended entry points came out empty')
 
   for (const entry of unattended) {
     const closure = importClosure([entry])
@@ -252,26 +311,60 @@ test('eval-30 the unattended paths cannot reach the send module', () => {
   }
 })
 
-test('eval-31 the read verbs cannot reach the send module either', () => {
+test('eval-31 every file that is not a write verb cannot reach the send module, and every command file is classified', () => {
   // The point of splitting peers/id.ts out of send/: a read verb validates a
-  // peer id without linking the code that can write.
-  // groups/index.ts is the read half of `tg group` (invite links, members,
-  // topics): `tg group members` lists people without linking the code that can
-  // ban or promote them.
-  for (const entry of [
-    'cli/commands/dump.ts',
-    'cli/commands/media.ts',
-    'cli/commands/peers.ts',
-    'cli/commands/watch.ts',
-    'groups/index.ts'
-  ]) {
-    const closure = importClosure([entry])
-    assert.deepEqual(
-      [...closure].filter((f) => /\/send\/(index|gate)\.ts$/.test(f)).map((f) => f.slice(SRC.length)),
-      [],
-      `${entry} is a read verb and must not import the send module`
-    )
+  // peer id without linking the code that can write. D13f made the check derive
+  // from the module graph instead of a list somebody has to remember to extend.
+
+  // (1) Every command file on disk has a class, and no class names a file that is gone.
+  const onDisk = SOURCES.filter((f) => /^cli\/commands\/[^/]+\.ts$/.test(f.path)).map((f) => f.path.slice('cli/commands/'.length)).sort()
+  assert.ok(onDisk.length >= 15, `only found ${onDisk.length} command files`)
+  assert.deepEqual(
+    onDisk.filter((name) => !(name in COMMAND_CLASS)),
+    [],
+    'a command file has no class. Decide what it is and add it to COMMAND_CLASS: write, unattended, read or plumbing.'
+  )
+  assert.deepEqual(
+    Object.keys(COMMAND_CLASS).filter((name) => !onDisk.includes(name)),
+    [],
+    'COMMAND_CLASS names a command file that no longer exists'
+  )
+
+  // (2) The write class IS the allowlist's command files; nothing is quietly both.
+  assert.deepEqual(
+    Object.entries(COMMAND_CLASS).filter(([, kind]) => kind === 'write').map(([name]) => commandPath(name)).sort(),
+    [...WRITE_ALLOWLIST].filter((f) => f.startsWith('cli/commands/')).sort(),
+    'a command classified `write` must be on WRITE_ALLOWLIST with its reason, and the other way round'
+  )
+
+  // (3) No dynamic import or require can hide an edge from the walk.
+  assert.deepEqual(GRAPH.unfollowable, [], 'a dynamic import or require with a non-literal argument cannot be followed')
+
+  // (4) Exactly the write-capable files reach the send module. Everything else in
+  //     src/ - every command, every read module, every helper, today's and
+  //     tomorrow's - cannot. A new file that imports the send module, or imports
+  //     something that does, appears here.
+  const reaching = SOURCES.filter((f) => reachesSendModule(f.path)).map((f) => f.path).sort()
+  assert.deepEqual(
+    reaching,
+    WRITE_CAPABLE,
+    'the set of files that can reach the send module changed. A read verb must not import it; ' +
+    'a new write verb belongs on WRITE_ALLOWLIST and WRITE_CAPABLE with a decision record.'
+  )
+
+  // (5) The same, said per verb, so a failure names the verb and not just a file.
+  for (const [name, kind] of Object.entries(COMMAND_CLASS)) {
+    if (kind === 'write') continue
+    assert.ok(!reachesSendModule(commandPath(name)), `${name} is classified ${kind} and must not reach the send module`)
   }
+
+  // (6) A legacy write is exactly the commands that import the older exception.
+  const importers = onDisk.filter((name) => closureOf(GRAPH.graph, [commandPath(name)]).has('contacts/import.ts'))
+  assert.deepEqual(
+    Object.entries(COMMAND_CLASS).filter(([, kind]) => kind === 'legacy-write').map(([name]) => name).sort(),
+    importers.sort(),
+    'a command reaches contacts/import.ts without being classified legacy-write (or the other way round)'
+  )
 })
 
 test('eval-32 nothing holding a Telegram credential imports gbrain or an LLM', () => {
@@ -740,4 +833,277 @@ test('eval-168 over the moderation cap is refused, with the repo exit code for a
       else process.env.TG_MAX_MODERATION_PER_DAY = original
     }
   })
+})
+
+/**
+ * D13f: fence hardening. What the fence enforced by hand-kept lists and text
+ * patterns is now enforced from the syntax tree and the installed mtcute, and the
+ * rules run deny-by-default. The scanners are in test/fence-scan.ts; each eval
+ * below runs them on synthetic files first (the D14 tripwire check: inject a
+ * violation, watch the scan fail), then on the real sources.
+ */
+
+const tlMethods = tlRpcMethods()
+const isTlMethod = (name: string): boolean => tlMethods.has(name)
+const rawLists = { readMethods: READ_TL_METHODS, writeMethods: WRITE_TL_METHODS, isMethod: isTlMethod }
+const synthetic = (path: string, source: string): SourceText => ({ path, source })
+
+test('eval-175 a raw TL call outside src/send/ passes only if its method is a listed read', () => {
+  const outside = (source: string, readMethods: readonly string[] = []) =>
+    rawCallViolations([synthetic('cli/commands/x.ts', source)], { ...rawLists, readMethods })
+
+  // A write, a read nobody listed, every quote style: refused.
+  assert.equal(outside("await tg.call({ _: 'messages.sendMessage', peer })").length, 1)
+  assert.equal(outside('await tg.call({ _: "messages.sendMessage", peer })').length, 1)
+  assert.equal(outside('await tg.call({ _: `messages.sendMessage`, peer })').length, 1)
+  assert.equal(outside("await tg.call({ _: 'account.getAuthorizations' })").length, 1, 'unlisted, even though it only reads')
+  // The same shapes in another spelling of "call".
+  assert.equal(outside("await tg['call']({ _: 'messages.sendMessage' })").length, 1)
+  assert.equal(outside("await tg._client.call({ _: 'messages.sendMessage' })").length, 1)
+  assert.equal(outside("const { call } = tg\nawait call({ _: 'messages.sendMessage' })").length, 1 + 1, 'the alias and the literal')
+  // A call whose method cannot be read is refused on its own.
+  assert.match(outside('await tg.call(request)')[0] ?? '', /not a string literal/)
+  assert.equal(outside("await tg.call({ ...base, _: method })").length, 1)
+  // A request built first and passed later is caught by the literal.
+  assert.equal(outside("const req = { _: 'messages.sendMessage', peer }\nawait tg.call(req)").length, 2)
+
+  // What must NOT be flagged: a listed read in any quote style, a constructor
+  // name (data a read needs to ask its question), prose, and strings.
+  const listed = ['account.getAuthorizations']
+  assert.deepEqual(outside("await tg.call({ _: 'account.getAuthorizations' })", listed), [])
+  assert.deepEqual(outside('await tg.call({ _: "account.getAuthorizations" })', listed), [])
+  assert.deepEqual(outside("await tg.call({ _: 'account.getPrivacy', key: { _: 'inputPrivacyKeyStatusTimestamp' } })", ['account.getPrivacy']), [])
+  assert.deepEqual(outside("const peer = { _: 'inputPeerEmpty' }"), [])
+  assert.deepEqual(outside("// tg.call({ _: 'messages.sendMessage' }) would be refused\nconst text = \"tg.call({ _: 'messages.sendMessage' })\""), [])
+  assert.deepEqual(outside("/* await tg.call({ _: 'messages.sendMessage' }) */\nfunction call() {}"), [])
+
+  // Inside the fence a raw call must still be LISTED: eval-29b only checks that
+  // listed methods appear, so an unlisted raw write in send/ was invisible.
+  const inside = (source: string) => rawCallViolations([synthetic('send/index.ts', source)], rawLists)
+  assert.deepEqual(inside("await tg.call({ _: 'messages.toggleDialogPin', peer })"), [])
+  assert.equal(inside("await tg.call({ _: 'messages.sendMessage', peer })").length, 1)
+  assert.equal(inside('await tg.call(request)').length, 1)
+
+  // The real tree is clean...
+  assert.deepEqual(rawCallViolations(SOURCES, rawLists), [])
+  assert.ok(SOURCES.flatMap((f) => findRawCalls(f)).length >= 2, 'the scan found no raw call at all, so it passes for the wrong reason')
+
+  // ...and injecting a raw write next to the real files fails it (D14).
+  const injected = [...SOURCES, synthetic('peers/sneaky.ts', "export const go = (tg) => tg.call({ _: 'messages.sendMessage', peer: 1 })")]
+  assert.equal(rawCallViolations(injected, rawLists).length, 1)
+  const edited = SOURCES.map((f) => f.path === 'peers/index.ts'
+    ? synthetic(f.path, `${f.source}\nexport const twin = (tg: never) => (tg as { call: (r: object) => void }).call({ _: 'channels.editTitle' })\n`)
+    : f)
+  assert.equal(rawCallViolations(edited, rawLists).length, 1)
+})
+
+test('eval-175b the raw TL lists name real methods, and a raw read is a get', () => {
+  for (const method of [...READ_TL_METHODS, ...WRITE_TL_METHODS]) {
+    assert.ok(tlMethods.has(method), `${method} is not a method of the installed TL schema: a typo here fences nothing`)
+  }
+  for (const method of READ_TL_METHODS) {
+    // The schema names its reads `get*`. A write on this list would be a hole the
+    // whole size of that write, so the list cannot take one by mistake.
+    assert.match(method, /^[a-z]+\.get[A-Z]/, `${method} is on READ_TL_METHODS but is not a get*`)
+    assert.ok(!(WRITE_TL_METHODS as readonly string[]).includes(method), `${method} is both a read and a write`)
+    // The positive half: a listed read that nothing calls is a list that drifted.
+    const naming = rawMethodsNamed(SOURCES, isTlMethod).filter((n) => n.method === method).map((n) => n.path)
+    assert.ok(naming.length > 0, `${method} is on READ_TL_METHODS and no read verb calls it`)
+    assert.ok(naming.every((path) => !path.startsWith('send/')), `${method} is a read and belongs outside src/send/`)
+  }
+})
+
+test('eval-176 a fenced name is never aliased, destructured or looked up outside the files that may name it', () => {
+  const outside = (source: string, path = 'cli/commands/x.ts') =>
+    aliasViolations([synthetic(path, source)], WRITE_RPCS, WRITE_ALLOWLIST)
+
+  // Every way to hold a write method without writing `.name(`.
+  assert.equal(outside('const f = tg.sendText').length, 1, 'taken without being called')
+  assert.equal(outside('run(tg.deleteMessagesById)').length, 1, 'passed as a callback')
+  assert.equal(outside("await tg['sendText'](peer, 'x')").length, 1, 'bracket access')
+  assert.equal(outside('await tg["banChatMember"](chat, user)').length, 1, 'bracket access, other quotes')
+  assert.equal(outside('const { sendText } = tg').length, 1, 'destructured')
+  assert.equal(outside('const { sendText: post } = tg').length, 1, 'destructured under another name')
+  assert.equal(outside('const { a, editAdminRights } = tg').length, 1, 'destructured among others')
+  assert.equal(outside("Reflect.get(tg, 'sendMedia')").length, 1, 'looked up by Reflect')
+  assert.equal(outside("Object.getOwnPropertyDescriptor(proto, 'sendText')").length, 1, 'looked up by Object')
+  assert.equal(outside("if ('sendText' in tg) {}").length, 1, 'probed with in')
+  assert.equal(outside('await tg[method](peer)').length, 1, 'a method picked at run time')
+  assert.equal(outside('await client[name](peer)').length, 1, 'same on `client`')
+
+  // What is not an alias: a plain call is eval-29's, a TL flag that shares a
+  // spelling is data, and prose is prose.
+  assert.deepEqual(outside("await tg.sendText(peer, 'x')"), [], 'plain calls stay eval-29s job')
+  assert.deepEqual(outside('const can = rights.deleteMessages && restrictions.sendMedia'), [])
+  assert.deepEqual(outside('const flags = { deleteMessages: true, sendMedia: false }'), [])
+  assert.deepEqual(outside("const label = 'sendText'"), [], 'a bare string is not a lookup')
+  assert.deepEqual(outside("// tg.sendText is fenced; const { sendText } = tg is refused\n/* tg['sendText'] */"), [])
+  assert.deepEqual(outside('const row = table[name]'), [], 'indexing something that is not the client')
+
+  // The allowlisted files may name them: that is the allowlist.
+  assert.deepEqual(outside('const { sendText } = tg', 'send/index.ts'), [])
+  assert.deepEqual(outside('const f = tg.setChatTitle', 'cli/commands/group.ts'), [])
+
+  // The real tree is clean, and injection fails it (D14).
+  assert.deepEqual(aliasViolations(SOURCES, WRITE_RPCS, WRITE_ALLOWLIST), [])
+  const injected = [...SOURCES, synthetic('groups/sneaky.ts', 'export const { editAdminRights } = (null as never) as { editAdminRights: () => void }')]
+  assert.equal(aliasViolations(injected, WRITE_RPCS, WRITE_ALLOWLIST).length, 1)
+})
+
+test('eval-177 the import walk sees side-effect, re-export, dynamic and require edges', () => {
+  const edges = (source: string, path = 'cli/commands/x.ts') => importEdges(synthetic(path, source))
+
+  const to = ['send/index.ts']
+  assert.deepEqual(edges("import { sendText } from '../../send/index.js'").to, to)
+  assert.deepEqual(edges("import '../../send/index.js'").to, to, 'a side-effect import has no `from`')
+  assert.deepEqual(edges("export * from '../../send/index.js'").to, to)
+  assert.deepEqual(edges("export { sendText } from '../../send/index.js'").to, to)
+  assert.deepEqual(edges("const m = await import('../../send/index.js')").to, to, 'a dynamic import with a literal')
+  assert.deepEqual(edges("const m = require('../../send/index.js')").to, to)
+  assert.deepEqual(edges("import x = require('../../send/index.js')").to, to)
+  assert.deepEqual(edges("import chalk from 'chalk'\nimport { tl } from '@mtcute/node'").to, [], 'packages are not part of the graph')
+  assert.deepEqual(edges("const t = `import('../../send/index.js')` // import '../../send/index.js'").to, [], 'strings and comments are not imports')
+
+  // A dynamic import the walk cannot read is reported, not ignored.
+  assert.equal(edges('const m = await import(path)').unfollowable.length, 1)
+  assert.equal(edges('const m = require(`../${name}`)').unfollowable.length, 1)
+
+  // Through the whole graph: a file that only touches the send module through
+  // another file still reaches it.
+  const sources = [
+    ...SOURCES,
+    synthetic('peers/helper.ts', "import '../send/gate.js'"),
+    synthetic('cli/commands/sneaky-read.ts', "import { x } from '../../peers/helper.js'")
+  ]
+  const { graph } = importGraph(sources)
+  assert.ok([...closureOf(graph, ['cli/commands/sneaky-read.ts'])].includes('send/gate.ts'))
+  assert.ok(![...closureOf(importGraph(SOURCES).graph, ['cli/commands/peers.ts'])].includes('send/gate.ts'), 'and an honest read verb does not')
+})
+
+/** What mtcute declares that this suite has no opinion on yet. */
+function unclassified(names: readonly string[], manifest: Record<string, unknown>): string[] {
+  return names.filter((name) => !(name in manifest))
+}
+
+test('eval-178 every TelegramClient method of the installed mtcute is classified, so an upgrade cannot widen the account silently', () => {
+  const names = clientMethodNames()
+
+  assert.deepEqual(
+    unclassified(names, CLIENT_METHODS),
+    [],
+    'mtcute declares a method the coverage manifest (test/coverage-manifest.ts) does not list. ' +
+    'Classify it: covered, planned:<release>, defer, never or excluded:<reason>, and read or write.'
+  )
+  assert.deepEqual(
+    Object.keys(CLIENT_METHODS).filter((name) => !names.includes(name)),
+    [],
+    'the manifest lists a method this mtcute no longer declares: remove it'
+  )
+
+  // Deny by default, shown: an upgrade that adds a method makes the check fail.
+  assert.deepEqual(unclassified([...names, 'sendWhateverNewInMtcute28'], CLIENT_METHODS), ['sendWhateverNewInMtcute28'])
+
+  // Every entry is well formed: a typo in a status would otherwise read as "planned".
+  for (const [name, [status, access]] of Object.entries(CLIENT_METHODS)) {
+    assert.match(status, /^(covered|defer|never|planned:\d+\.\d+(\.\d+)?|excluded:(auth|internal|iter|variant|bot))$/, `${name}: bad status ${status}`)
+    assert.ok(['read', 'write', 'session'].includes(access), `${name}: bad access ${access}`)
+  }
+
+  // The arithmetic TASK-43 counts coverage by.
+  const summary = summarize()
+  const planned = Object.values(summary.planned).reduce((sum, n) => sum + n, 0)
+  assert.equal(summary.total, names.length)
+  assert.equal(summary.inScope, summary.covered + planned + summary.defer + summary.never)
+  assert.equal(summary.excluded + summary.inScope, summary.total)
+  assert.ok(summary.covered >= 47, `coverage went backwards: ${summary.covered}`)
+})
+
+/** The methods the older exception in src/contacts/import.ts calls outside the fence (D13). 0.9 moves them into src/send/ (TASK-43 AC 14). */
+const LEGACY_WRITES = ['importContacts', 'deleteContacts']
+
+test('eval-179 the manifest agrees with the code: what is covered is used, what is read is the only thing outside the fence, what writes is fenced', () => {
+  const known = new Set(Object.keys(CLIENT_METHODS))
+  const uses = clientUses(SOURCES, known)
+  const usedAnywhere = new Set(uses.map((u) => u.name))
+  assert.ok(uses.length > 40, 'the scan found almost no client calls, so it passes for the wrong reason')
+
+  // (1) Covered means reachable: the method, or the iter* twin that walks it, is called.
+  const twin = (name: string): string[] => {
+    const bare = name.replace(/^get/, '')
+    return [name, `iter${bare.charAt(0).toUpperCase()}${bare.slice(1)}`, `iter${name.charAt(0).toUpperCase()}${name.slice(1)}`]
+  }
+  for (const [name, [status]] of Object.entries(CLIENT_METHODS)) {
+    if (status !== 'covered') continue
+    assert.ok(twin(name).some((candidate) => usedAnywhere.has(candidate)), `${name} is marked covered and nothing in src/ calls it`)
+  }
+
+  // (2) Outside the fence a file may call only reads and the login lifecycle.
+  for (const use of uses) {
+    if (WRITE_ALLOWLIST.has(use.path)) continue
+    const [, access] = CLIENT_METHODS[use.name]!
+    assert.ok(access !== 'write', `${use.where} calls ${use.name}, which the manifest classes as a write, outside the fence`)
+  }
+
+  // (3) A write that is called anywhere is a fenced write: this is the hole eval-29
+  //     could not close, a write method nobody had put on WRITE_RPCS.
+  for (const name of usedAnywhere) {
+    if (CLIENT_METHODS[name]![1] !== 'write') continue
+    assert.ok(
+      (WRITE_RPCS as readonly string[]).includes(name) || LEGACY_WRITES.includes(name),
+      `${name} is a write that src/ calls and WRITE_RPCS does not name`
+    )
+  }
+
+  // (4) The fence's own list is made of real writes.
+  const names = new Set(clientMethodNames())
+  for (const rpc of WRITE_RPCS) {
+    assert.ok(names.has(rpc), `WRITE_RPCS names ${rpc}, which mtcute does not declare: a typo fences nothing`)
+    assert.equal(CLIENT_METHODS[rpc]?.[1], 'write', `${rpc} is fenced but the manifest does not class it a write`)
+  }
+  // And every covered write is on it.
+  for (const [name, [status, access]] of Object.entries(CLIENT_METHODS)) {
+    if (status === 'covered' && access === 'write') {
+      assert.ok(
+        (WRITE_RPCS as readonly string[]).includes(name) || LEGACY_WRITES.includes(name),
+        `${name} is a covered write and is not on WRITE_RPCS`
+      )
+    }
+  }
+})
+
+test('eval-180 what is never added is nowhere in src/, client method or raw TL', () => {
+  const known = new Set(Object.keys(CLIENT_METHODS))
+  for (const use of clientUses(SOURCES, known)) {
+    const [status] = CLIENT_METHODS[use.name]!
+    assert.notEqual(status, 'never', `${use.where} uses ${use.name}, which TASK-43 section 6 says is never added`)
+  }
+
+  // Raw TL: the manifest and the two fence lists say the same thing, both ways.
+  for (const method of Object.keys(RAW_TL_METHODS)) {
+    assert.ok(tlMethods.has(method), `RAW_TL_METHODS lists ${method}, which the TL schema does not have`)
+  }
+  const raw = rawMethodsNamed(SOURCES, isTlMethod)
+  const covered = Object.entries(RAW_TL_METHODS).filter(([, [status]]) => status === 'covered').map(([name]) => name).sort()
+  assert.deepEqual(
+    [...new Set(raw.map((n) => n.method))].sort(),
+    covered,
+    'the raw TL methods written out in src/ are not exactly the ones the manifest calls covered'
+  )
+  assert.deepEqual(
+    [...WRITE_TL_METHODS, ...READ_TL_METHODS].sort(),
+    covered,
+    'WRITE_TL_METHODS and READ_TL_METHODS together must be exactly the covered raw methods'
+  )
+  for (const [method, [status, access]] of Object.entries(RAW_TL_METHODS)) {
+    if (status !== 'covered') continue
+    assert.equal(
+      READ_TL_METHODS.includes(method),
+      access === 'read',
+      `${method}: a covered raw read is on READ_TL_METHODS and a covered raw write on WRITE_TL_METHODS`
+    )
+  }
+  // Unsupported families.
+  for (const { method } of raw) {
+    assert.ok(!UNSUPPORTED_TL_PREFIXES.some((prefix) => method.startsWith(prefix)), `${method} is unsupported (calls need a media stack)`)
+  }
 })

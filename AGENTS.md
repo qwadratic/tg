@@ -125,10 +125,28 @@ person, so it has rules that are enforced by `test/trust.test.ts`, not by taste:
   D13d, D13e, D13e-a). A verb that acts on a person also joins
   `MODERATION_KINDS` in `src/send/gate.ts`, and one that grants power or destroys
   history joins `TTY_ONLY_KINDS`; a kind on neither list is on neither guard.
+- **Do not reach a write another way.** Since D13f the fence is read from the
+  syntax tree and denies by default. A raw `tg.call({ _: '...' })` outside
+  `src/send/` fails unless its method is on `READ_TL_METHODS` (eval-175: every
+  entry is a `get*` method of the TL schema, so a write cannot be listed as a
+  read). An alias, a destructuring, a bracket access or a `Reflect` lookup of a
+  fenced name fails (eval-176). A write method that
+  `test/coverage-manifest.ts` knows and `WRITE_RPCS` does not fails (eval-179).
+  None of this is a reason to find a cleverer spelling: the dynamic cases are
+  refused on purpose.
+- **Classify every mtcute method.** `test/coverage-manifest.ts` lists each
+  method of `TelegramClient` as covered, planned, defer, never or excluded, and as
+  read or write (eval-178). An mtcute upgrade that adds a method fails the suite
+  until somebody classifies it, and a `never` method called anywhere in `src/`
+  fails it too (eval-180). Shipping a verb means moving its methods to `covered`.
 - **Do not import `src/send/` from an unattended path.** eval-30 and eval-31 walk
-  the import graphs of `export`, `folders`, `ship`, `sync` and every read verb,
-  and fail if any of them can reach it. That is what makes "a cron job cannot
-  message anyone" a fact rather than a hope.
+  the import graph, and only five files may reach the send module: `src/index.ts`
+  (the registration root), `cli/commands/send.ts`, `cli/commands/group.ts` and the
+  two files of `src/send/`. Every other file, every read module included, cannot;
+  a new file that imports it, directly or through another file, fails the suite.
+  A new command file also fails until it is classified in `COMMAND_CLASS` in
+  `test/trust.test.ts` (write, unattended, read or plumbing). That is what makes
+  "a cron job cannot message anyone" a fact rather than a hope.
 
 `tg send log` shows what this workspace has already sent. Check it before
 sending anything in a series.
