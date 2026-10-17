@@ -164,3 +164,26 @@ test('eval-199 every read verb takes --json, lists take --limit, and none of the
     assert.ok(at > 0 && at < writeStart, `register${register}Command must be called above the write verbs`)
   }
 })
+
+test('eval-200 the README and the skill document every read verb of 0.8', () => {
+  const docs = { 'README.md': read('README.md'), 'skill/SKILL.md': read('skill', 'SKILL.md') }
+  const mentions = [
+    'chat info', 'chat log', 'group member', 'msg get', 'msg link', 'msg thread', 'msg search',
+    'user info', 'contacts list', 'dialogs show', 'draft list', 'scheduled list', 'reactions show',
+    'account sessions', 'account privacy', 'account notify', '--topic', '--thread'
+  ]
+
+  for (const [name, text] of Object.entries(docs)) {
+    for (const mention of mentions) assert.ok(text.includes(mention), `${name} never mentions ${mention}`)
+  }
+
+  // The place a new module lives is in the layout table an agent reads first.
+  const agents = read('AGENTS.md')
+  for (const path of ['src/chats/', 'src/dialogs/', 'src/users/', 'src/account/', 'src/reads/errors.ts', 'src/messages/read.ts', 'src/messages/search.ts']) {
+    assert.ok(agents.includes(path), `AGENTS.md's layout table does not list ${path}`)
+  }
+
+  // And what the read verbs promise about numbers, money and names is said where an agent will see it.
+  assert.match(docs['skill/SKILL.md'], /phone number/i)
+  assert.match(docs['skill/SKILL.md'], /Stars/)
+})

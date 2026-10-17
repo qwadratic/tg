@@ -44,7 +44,7 @@ Act on the exit code. Do not parse prose.
 | --- | --- | --- |
 | 0 | ready | proceed |
 | 2 | usage | you passed something wrong; fix the command |
-| 3 | needs a human | **STOP.** Only a human can resolve this, and retrying cannot. Either the workspace needs `tg session login` at a terminal (`status: needs_human_login`), or you tried to send unattended and no one authorised it. Ask the operator; do not add `--yes` yourself |
+| 3 | needs a human | **STOP.** Only a human can resolve this, and retrying cannot. Either the workspace needs `tg session login` at a terminal (`status: needs_human_login`), you tried to send unattended and no one authorised it, or a read needed admin rights this account does not have (`chat log`). Ask the operator; do not add `--yes` yourself |
 | 4 | `not_configured` | the report's `hint` is the fix; usually no human needed |
 | 5 | busy | another run holds the workspace lock. Wait, retry |
 | 6 | upstream | Telegram, gbrain or the network failed. Retry with backoff |
@@ -105,6 +105,39 @@ tg dump 108844221 --limit 200
 A chat can be named by numeric id, `@username`, a `t.me` link, or `me` for
 Saved Messages. The command prints the resolved identity to stderr before acting,
 so the operator can see which chat it actually hit.
+
+**"What is this chat, who is that person, what happened here?"** All read-only.
+```sh
+tg chat info <peer>                      # kind, members, settings, description; --basic is one cheaper request
+tg chat log <peer> --type title_changed,user_left --limit 50   # the admin log; needs admin rights
+tg group member <peer> <user>            # one person's role, rights, who invited or promoted them
+tg user info <peer> --common             # a person, and the groups you share
+tg contacts list --query zoe             # your address book by name
+```
+
+**"Read one message, a thread, or search Telegram for it."** All read-only.
+```sh
+tg msg get <peer> 12 13                  # messages by id, whole
+tg msg link https://t.me/durov/123       # the message behind a t.me link
+tg msg thread <peer> 12                  # what it replies to, its album, where a post's comments live
+tg dump <peer> --topic 5                 # one forum topic (its id is the first message)
+tg dump <peer> --thread 12               # the replies under a message
+tg msg search "invoice" --chat <peer> --since 2026-09-01
+tg msg search "invoice" --global --filter document
+tg msg search mtcute --hashtag
+tg msg search "release notes" --posts    # public channel posts
+```
+
+**"Where do my chats stand, and what is waiting?"** All read-only.
+```sh
+tg dialogs show <peer> <peer>            # unread, pinned, muted, archived, last message
+tg draft list                            # unsent drafts, with their text
+tg scheduled list <peer>                 # messages waiting to be sent in a chat
+tg reactions show <peer> 31 --users      # counts, and who
+tg account sessions                      # every login of the account, this one first
+tg account privacy last-seen             # who may see what; omit the key for all of them
+tg account notify                        # notification defaults, or one chat
+```
 
 **"Get me that PDF / photo / recording."**
 ```sh
@@ -258,6 +291,35 @@ do. `tg send log` shows today's count.
 5. **One instance per workspace.** Exit 5 means another run holds the lock. Wait,
    do not delete the lock.
 
+## The read verbs have rules of their own
+
+`chat`, `msg`, `user`, `contacts`, `dialogs`, `draft`, `scheduled`, `reactions`,
+`account` and `group member` only read. They have no `--yes` and no confirmation,
+and they cannot send: a test walks the import graph and fails if one could. They
+all take `--json` (stdout carries only the payload), and what can be long takes
+`--limit`.
+
+- **Exit codes.** A lookup or a search that finds nothing is `2`: the id or the
+  needle was wrong, so change it rather than retrying. A listing that is
+  legitimately empty (no drafts, nothing scheduled) prints that and exits `0`.
+  `3` is `CHAT_ADMIN_REQUIRED` (the admin log, for one): a human must grant the
+  right, so stop and ask. `6` is Telegram throttling or failing: retry later.
+- **Do not loop.** Every list is paged with a pause after each 100 items. Ask for
+  what you need with `--limit`, `--since` and a scope; do not call a search ten
+  times to get more, and do not run two at once (exit `5`).
+- **No phone numbers, no invite links.** `contacts list` and `user info` have no
+  phone field, so `--json` cannot export the address book; `chat info` and `chat
+  log` never show a chat's invite link. Do not look for another command to get
+  them.
+- **`msg search --posts` never pays.** It uses Telegram's free daily allowance of
+  public-post searches. When that is used up it exits `3` and says how many Stars
+  Telegram wants; spending them is the operator's decision, in the Telegram app.
+- **`msg search` is Telegram's own search, live.** It is not the archive search,
+  which reads Markdown files and needs no session (TASK-26, not built yet).
+- **Names.** A chat or a person can be an id, `@username`, a `t.me` link or `me`,
+  and the resolved identity is printed to stderr first: read it back to the
+  operator when you used a handle. `msg link` refuses an invite link by name.
+
 ## Rate limits are real
 
 History reads pause 1.5s per 100 messages, and `FLOOD_WAIT` is caught and waited
@@ -280,7 +342,8 @@ them in full. If the operator wants one removed:
 
 - It does not read anyone else's Telegram. It is the operator's own session.
 - It does not do semantic search itself; that is gbrain's job. `tg` produces the
-  pages, gbrain embeds and answers.
+  pages, gbrain embeds and answers. `tg msg search` is Telegram's own keyword
+  search, run live.
 - It does not extract text from PDFs or transcribe audio.
 - It has no daemon. `tg watch` is the only long-lived command.
 
