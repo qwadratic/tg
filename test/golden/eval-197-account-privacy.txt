@@ -1,0 +1,4 @@
+last-seen     allow contacts; deny users 5,6
+phone-number  deny all
+about         allow all
+groups        no rule: Telegram's default

@@ -126,9 +126,23 @@ hand-edited, per-machine file, never part of a workspace, never committed.
 | --- | --- |
 | `peers list [--type user] [--since <date>] [--no-bots] [--json]` | chats, most recent activity first |
 | `peers find <needle> [--json] [--id-only]` | chats whose name or username matches, accent-insensitively |
-| `dump <peer> [--since <date>] [--limit n] [--json]` | one chat as a flat chronological transcript on stdout |
+| `dump <peer> [--since <date>] [--limit n] [--topic <id> \| --thread <id>] [--json]` | one chat as a flat chronological transcript on stdout; `--topic` reads one forum topic, `--thread` the replies under one message |
 | `media pull [peer] [--kind photo,video] [--max n] [--to dir]` | download media; no peer means your Saved Messages |
 | `watch [peer] [--minutes n] [--kind ...]` | wait for media that has not been sent yet, then download it |
+| `chat info <peer> [--basic] [--json]` | what a group, supergroup or channel is: kind, members, settings, description |
+| `chat log <peer> [--type a,b] [--user ids] [--query text] [--limit n]` | the admin log of a supergroup or channel, newest first (needs admin rights) |
+| `group member <peer> <user>` | one person's standing in a chat: role, rights, who invited or promoted them |
+| `msg get <peer> <ids...> [--json]` | messages by id, in full |
+| `msg link <url> [--json]` | the message a `t.me` link points at |
+| `msg thread <peer> <id> [--depth n]` | one message in context: what it replies to, its album, where a post's comments live |
+| `msg search <query> (--chat <peer> \| --global \| --hashtag \| --posts) [--filter kind] [--from id] [--since d] [--until d] [--limit n]` | search Telegram live, newest first |
+| `user info <peer> [--basic] [--common] [--json]` | a person: name, handles, contact state, last seen, bio, shared chats |
+| `contacts list [--query text] [--limit n]` | the address book by name (never phone numbers) |
+| `dialogs show <peers...>` | where chats stand in your chat list: unread, pinned, muted, archived, last message |
+| `draft list [--scan n] [--limit n]` | the unsent drafts waiting in your chats, with their text |
+| `scheduled list <peer> [ids...]` | messages waiting to be sent in a chat, soonest first |
+| `reactions show <peer> <id> [--users] [--limit n]` | the reactions on a message: counts, and with `--users` who |
+| `account sessions` / `account privacy [key]` / `account notify [peer]` | the account's own sessions, privacy rules and notification settings |
 
 `dump` appends an engagement suffix when Telegram populates one — views,
 forwards, the three loudest reactions, the reply/comment count, and `edited`:
@@ -176,6 +190,43 @@ more than one chat** rather than guessing. Guessing is how the wrong chat gets
 read or texted.
 
 `dump` writes the payload to stdout and everything else to stderr, so it pipes.
+
+### Reading Telegram live
+
+The verbs from `chat info` to `account notify` above only read, and they share the
+rules below. `AGENTS.md` and `skill/SKILL.md` have the version for agents.
+
+- **They cannot write.** None of them is behind the send gate, none can import the
+  send module (a test walks the import graph), and the raw calls they make
+  (`account.getAuthorizations`, `account.getPrivacy`, `account.getNotifySettings`)
+  are on a list of reads that a test checks: a raw call to anything else outside
+  `src/send/` fails the suite.
+- **`--json` and `--limit`.** Every one takes `--json`, which prints only the
+  payload on stdout. Anything that can be long takes `--limit` with a ceiling you
+  must choose to reach, and pages through one paced walk: after every 100 items it
+  waits 1.5s plus jitter, the same pacing `dump` has always had.
+- **Exit codes.** A lookup or a search that finds nothing is `2` (the id or the
+  needle was wrong), like `peers find --id-only`; a listing that is legitimately
+  empty (no drafts, nothing scheduled) says so and exits `0`, like every other
+  listing. `3` is `CHAT_ADMIN_REQUIRED`: a human with the right must act. `6` is
+  Telegram throttling or failing, or the network.
+- **Names.** A chat or a person can be an id, `@username`, a `t.me` link or `me`; the
+  resolved identity is printed to stderr first, as everywhere (see above). `msg link`
+  also takes a message link, and refuses an invite link by name, because nothing here
+  joins anything.
+- **What is left out on purpose.** Phone numbers are never printed (`contacts list`
+  and `user info` have no phone field, so `--json` cannot export the address book).
+  Chat invite links are not shown by `chat info` or `chat log`. `msg search --posts`
+  uses only Telegram's free daily allowance of public-post searches; when it is used
+  up the answer is exit `3` and nothing is ever paid in Stars. Nothing marks a
+  message read, a reaction read or a story viewed.
+- **Two searches.** `msg search` asks Telegram, so it costs requests and finds what
+  was never archived. The offline search over the archive (TASK-26) keeps the name
+  `tg search`; they are different verbs because one needs a session and the other
+  does not.
+
+The reasoning, and the fence checks that back these rules, are in
+`backlog/decisions/2026-10-17-core-reads-and-fence-hardening.md` (D13f).
 
 ## Archiving
 
@@ -295,8 +346,10 @@ Five guards, each one enforced by a test:
 cannot be aimed at another person by mistake.
 
 The unattended commands provably cannot send: `test/trust.test.ts` walks the
-import graphs of `export`, `folders`, `ship` and every read verb and fails the
-suite if any of them can reach the send module. A cron job cannot message anyone.
+import graph and fails the suite unless exactly five files can reach the send
+module (the registration root, the two write command files and the two files of
+`src/send/`). Every other file, every read verb included, cannot, and a command
+file nobody has classified fails too. A cron job cannot message anyone.
 
 ## Administering a group or channel
 
@@ -340,6 +393,7 @@ confirmation prompt (or `--yes`), and a line in `data/sent.jsonl`.
 | `group restrict <peer> <id> --deny <a,b> [--until <date>]` | take abilities away from one member, e.g. `send-messages,send-media` |
 | `group promote <peer> <id> --rights <a,b> [--rank <title>]` | make one person an admin with exactly the rights named; terminal only, `--yes` does not bypass it |
 | `group demote <peer> <id>` | take every admin right away; they stay a member |
+| `group member <peer> <user>` | one person's standing in the chat: role, rights, who invited or promoted them (read-only) |
 
 Two of these do not come back:
 
@@ -511,8 +565,9 @@ run at the same time.
   cron jobs and agent runs, which often have a pty and would otherwise hang
   forever on a phone-number prompt.
 - `--json` is machine-readable on every read verb; stdout carries only the payload.
-- Exit codes: `0` success, `1` failure. Environment problems print an
-  instruction and no stack trace.
+- Exit codes are a contract, in `AGENTS.md`: `0` ok, `1` a bug in tg, `2` usage, `3`
+  needs a human, `4` not configured, `5` busy, `6` upstream. Environment problems
+  print an instruction and no stack trace.
 - Rate limiting is built in: history reads pause 1.5s plus jitter every 100
   messages, and `FLOOD_WAIT` is caught and waited out.
 

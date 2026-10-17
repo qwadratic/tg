@@ -21,7 +21,7 @@ Exit codes are the contract. Act on them, do not parse prose:
 | 0 | ok | proceed |
 | 1 | a bug in this tool | report it, with the stack |
 | 2 | usage error | fix the command |
-| 3 | needs a human | STOP. Either the workspace needs `tg session login`, an unattended send was refused, or a terminal-only action (`group promote`) was refused. Ask the operator; retrying is pointless and `--yes` is theirs to give, not yours to add (and for a terminal-only action no `--yes` helps) |
+| 3 | needs a human | STOP. Either the workspace needs `tg session login`, an unattended send was refused, a terminal-only action (`group promote`) was refused, or a read that only an admin may do was (`chat log`: `CHAT_ADMIN_REQUIRED`). Ask the operator; retrying is pointless and `--yes` is theirs to give, not yours to add (and for a terminal-only action no `--yes` helps) |
 | 4 | `not_configured` | the report's `hint` is the fix; it usually needs no human |
 | 5 | busy | another run holds the lock. Wait and retry |
 | 6 | upstream | Telegram, gbrain or the network failed. Not your fault; retry with backoff |
@@ -36,7 +36,11 @@ stream and a bare number:
 ```
 
 Zero results is `usage` (2), not `not_configured` (4): a needle that matched
-nothing is a bad search term, not a broken workspace.
+nothing is a bad search term, not a broken workspace. That is a lookup or a
+search: `msg get` for ids that are not there, `msg search` with no hits, `group
+member` for someone who is not in the chat. A listing that is legitimately empty
+(`draft list`, `scheduled list`, `contacts list`, `chat log` with no events)
+prints that it is empty and exits 0, as every shipped listing does.
 
 ## Run commands, do not ask for passwords
 
@@ -125,10 +129,28 @@ person, so it has rules that are enforced by `test/trust.test.ts`, not by taste:
   D13d, D13e, D13e-a). A verb that acts on a person also joins
   `MODERATION_KINDS` in `src/send/gate.ts`, and one that grants power or destroys
   history joins `TTY_ONLY_KINDS`; a kind on neither list is on neither guard.
+- **Do not reach a write another way.** Since D13f the fence is read from the
+  syntax tree and denies by default. A raw `tg.call({ _: '...' })` outside
+  `src/send/` fails unless its method is on `READ_TL_METHODS` (eval-175: every
+  entry is a `get*` method of the TL schema, so a write cannot be listed as a
+  read). An alias, a destructuring, a bracket access or a `Reflect` lookup of a
+  fenced name fails (eval-176). A write method that
+  `test/coverage-manifest.ts` knows and `WRITE_RPCS` does not fails (eval-179).
+  None of this is a reason to find a cleverer spelling: the dynamic cases are
+  refused on purpose.
+- **Classify every mtcute method.** `test/coverage-manifest.ts` lists each
+  method of `TelegramClient` as covered, planned, defer, never or excluded, and as
+  read or write (eval-178). An mtcute upgrade that adds a method fails the suite
+  until somebody classifies it, and a `never` method called anywhere in `src/`
+  fails it too (eval-180). Shipping a verb means moving its methods to `covered`.
 - **Do not import `src/send/` from an unattended path.** eval-30 and eval-31 walk
-  the import graphs of `export`, `folders`, `ship`, `sync` and every read verb,
-  and fail if any of them can reach it. That is what makes "a cron job cannot
-  message anyone" a fact rather than a hope.
+  the import graph, and only five files may reach the send module: `src/index.ts`
+  (the registration root), `cli/commands/send.ts`, `cli/commands/group.ts` and the
+  two files of `src/send/`. Every other file, every read module included, cannot;
+  a new file that imports it, directly or through another file, fails the suite.
+  A new command file also fails until it is classified in `COMMAND_CLASS` in
+  `test/trust.test.ts` (write, unattended, read or plumbing). That is what makes
+  "a cron job cannot message anyone" a fact rather than a hope.
 
 `tg send log` shows what this workspace has already sent. Check it before
 sending anything in a series.
@@ -168,16 +190,26 @@ That is intended. Do not start an export beside it.
 | `src/peers/id.ts` | `assertPeerId` — the send module's own numeric boundary |
 | `src/peers/index.ts` | dialog listing and name matching |
 | `src/dump/index.ts` | flat chat transcripts |
-| `src/groups/index.ts` | group/channel READS: invite links, members, forum topics. Imports no send code |
+| `src/groups/index.ts` | group/channel READS: invite links, members (one or the list), forum topics. Imports no send code |
+| `src/chats/index.ts` | READS of what a chat is and what happened in it: `chat info`, `chat log` (the admin log). Imports no send code |
+| `src/users/index.ts` | READS of people: `user info`, `contacts list`. Never a phone number |
+| `src/dialogs/index.ts` | READS of the chat list: `dialogs show`, `draft list` |
+| `src/account/index.ts` | READS of the account's own settings through raw TL: `account sessions`, `privacy`, `notify`. The only raw calls outside `src/send/`, and each method is on `READ_TL_METHODS` |
+| `src/reads/errors.ts` | `friendlyReadError`: Telegram's refusals of a read as exit codes (3 admin, 6 flood or network, 2 not found). The send module has its own table; a read cannot import it |
 | `src/groups/rights.ts` | the admin-right and restriction vocabularies, pure data shared by the read and write halves |
 | `src/media/index.ts` | media download |
 | `src/watch/index.ts` | polling for media not yet sent |
 | `src/send/gate.ts` | send caps, the daily moderation cap, confirmation rule, the TTY-only class (`TTY_ONLY_KINDS`), audit log. No RPCs |
 | `src/send/index.ts` | **the only module that calls a Telegram write RPC** |
-| `src/messages/fetch.ts` | the single rate-limited history iterator. Do not add a second |
+| `src/messages/fetch.ts` | the paced walk (`paced`) and the history iterator built on it. Every `iter*` call in `src/` is an argument of `paced(...)`, and eval-181 fails if one is not (`peers/index.ts` is the one named exception). Do not add a second reader |
+| `src/messages/read.ts` | READS of single messages: `msg get`, `link`, `thread`, `scheduled list`, and the shared message row |
+| `src/messages/search.ts` | live search: `msg search` (`--chat`, `--global`, `--hashtag`, `--posts`). Never passes `payStars` |
+| `src/messages/reactions.ts` | `reactions show`: counts and, on request, who |
 | `src/folders/status.ts` | pure derivation of folder recency from sync state |
 | `src/update/index.ts` | self-update: cache, version compare, detached worker |
-| `src/cli/commands/` | one file per command group, registered in `src/index.ts` |
+| `src/cli/commands/` | one file per command group, registered in `src/index.ts`. A new file must be classified in `COMMAND_CLASS` in `test/trust.test.ts` |
+| `test/coverage-manifest.ts` | every `TelegramClient` method and the raw TL methods in use, classified covered, planned, defer, never or excluded, and read or write. eval-178 compares it with the installed mtcute |
+| `test/fence-scan.ts` | the syntax-tree scanners behind the fence evals (raw calls, aliases, import graph, unpaced iterators) |
 
 Data paths resolve against `TG_DATA_DIR`, default `data`, which is relative — so
 they resolve against the current directory at the moment of the call. That is how

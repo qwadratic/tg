@@ -4,6 +4,7 @@ title: 'tg search over the archive, before any FTS5 index'
 status: To Do
 assignee: []
 created_date: '2026-08-18 03:58'
+updated_date: '2026-10-17 11:37'
 labels:
   - search
 dependencies: []
@@ -28,3 +29,9 @@ BUILD: tg search <query> [--from] [--since] [--kind] [--json] as a ranked reader
 - [ ] #2 a Hungarian and a Russian query both return their known hit, asserted in a test
 - [ ] #3 no new on-disk copy of message content is created
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-17: the name `tg search` is yours. D13f (backlog/decisions/2026-10-17-core-reads-and-fence-hardening.md) settled the collision with TASK-43 phase 0.8: the LIVE search of Telegram is `tg msg search` (chat, global, hashtag, public posts), so this task needs no flag and no rename. The two are different verbs on purpose: this one reads Markdown files and needs no session, the live one asks Telegram.
+<!-- SECTION:NOTES:END -->

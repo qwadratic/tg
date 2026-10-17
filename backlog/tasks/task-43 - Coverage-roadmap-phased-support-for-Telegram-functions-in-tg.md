@@ -4,7 +4,7 @@ title: 'Coverage roadmap: phased support for Telegram functions in tg'
 status: To Do
 assignee: []
 created_date: '2026-10-17 09:04'
-updated_date: '2026-10-17 10:22'
+updated_date: '2026-10-17 11:37'
 labels:
   - roadmap
   - coverage
@@ -17,9 +17,9 @@ ordinal: 43000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-The owner wants `tg` to support, gradually, every Telegram function an operator uses, through the repo's fenced-write model (D13 of 2026-08-17, D13a-b, D13c tiers of 2026-08-31, D13d of 2026-10-05, D13e for 0.7.0). Today `tg` 0.6.0 reaches 42 of the 217 operator-facing methods in mtcute's `TelegramClient` (19%): reading one chat at a time, archiving, 15 send verbs and 27 `tg group` verbs. 0.7.0 (moderation, being built on a separate worktree under D13e) brings it to 47 (22%). This task is the map and the order of work, not a build ticket. Each phase below becomes its own backlog task when the operator confirms its scope, exactly as TASK-41 (tgTUI) is a PRD rather than a build ticket.
+The owner wants `tg` to support, gradually, every Telegram function an operator uses, through the repo's fenced-write model (D13 of 2026-08-17, D13a-b, D13c tiers of 2026-08-31, D13d of 2026-10-05, D13e for 0.7.0). Today `tg` 0.6.0 reaches 42 of the 217 operator-facing methods in mtcute's `TelegramClient` (19%): reading one chat at a time, archiving, 15 send verbs and 27 `tg group` verbs. 0.7.0 (moderation, D13e) brought it to 47 (22%), and 0.8.0 (core reads and fence hardening, D13f) to 69 (32%). This task is the map and the order of work, not a build ticket. Each phase below becomes its own backlog task when the operator confirms its scope, exactly as TASK-41 (tgTUI) is a PRD rather than a build ticket.
 
-Two constraints decide the shape of everything below, and both are the repo's own: reads are cheap to add because a read verb must not be able to reach `src/send/` (eval-31 lists its read entry points by hand, five once 0.7.0 lands; phase 0.8 derives the list so every new read verb is checked), and every write is a decision (D13a and D13b: "The next verb needs the next amendment"). So the roadmap puts every read first and spends one decision record per write phase.
+Two constraints decide the shape of everything below, and both are the repo's own: reads are cheap to add because a read verb must not be able to reach `src/send/` (eval-31 listed its read entry points by hand; since 0.8.0 it is derived from the module graph, so every new read verb is checked), and every write is a decision (D13a and D13b: "The next verb needs the next amendment"). So the roadmap puts every read first and spends one decision record per write phase.
 
 ## How the numbers were derived
 
@@ -34,6 +34,8 @@ Source: `@mtcute/core` 0.27.8 (the pin in `pnpm-lock.yaml`; the global install o
 | bot-account-only | 15 | `answerCallbackQuery`, `setMyCommands`, `answerInlineQuery`, `getBusinessConnection`... meaningless for a user account |
 
 "Covered" means an operator can reach the method through a `tg` verb today. Raw TL calls that mtcute has no wrapper for are counted separately (section 2). The 0.8 phase turns this classification into a checked-in manifest with a test, so it cannot rot. Counts are given for today (0.6.0) and for after 0.7.0, the moderation release the owner decided to ship first. The 0.7.0 verbs (`group members`, `ban`, `unban`, `restrict`, `promote`, `demote`) were read from the in-progress worktree, not from a released version; D13e is authoritative if it differs.
+
+Since 0.8.0 this classification is a checked-in file, `test/coverage-manifest.ts`, compared with the installed mtcute by eval-178: a method it does not list fails the suite. Building it settled two things the hand count left open. `never` is 29 and `defer` 16, not 25 and 20, because section 6 names four methods the table counted as deferred (`getNearbyChats`, `deleteGroup`, `setGlobalTtl`, `resolvePhoneNumber`); section 6 is the policy, so the manifest follows it. And every method is classed read or write, which is how the fence now catches a write nobody listed. The 217 in scope, the 47 covered before 0.8 and every phase size are exactly as computed here.
 
 ## 1. Coverage table (mtcute high-level methods in scope)
 
@@ -96,6 +98,8 @@ Curated, not exhaustive: TL layer 221 has 759 methods; these are the ones an ope
 | never | 14 | `auth.resetAuthorizations`, `account.deleteAccount`, `account.changePhone`, `account.setAccountTTL`, `account.setAuthorizationTTL`, `account.invalidateSignInCodes`, `messages.clearAllDrafts`, `channels.convertToGigagroup`, `messages.report`, `messages.reportSpam`, `account.reportPeer`, `channels.reportSpam`, `account.updateConnectedBot`, `messages.sendQuickReplyMessages` |
 | unsupported | - | `phone.*` (calls), `messages.requestEncryption` (secret chats) |
 
+0.8.0 covered three of the nine raw reads: `account.getAuthorizations`, `account.getPrivacy`, `account.getNotifySettings`.
+
 ## 3. Option-level gaps inside methods tg already calls
 
 Coverage by method name hides these; several of them are what an operator actually asks for first.
@@ -147,6 +151,10 @@ Decided by the owner on 2026-10-17 and built outside this task; it is listed so 
 
 ### 0.8 Core reads and fence hardening (62 methods, 9 raw reads, no new write RPC)
 
+**Status, 2026-10-17: 0.8.0 ships the hardening and the core reads; the remaining reads are 0.8.1.** Decision D13f is `backlog/decisions/2026-10-17-core-reads-and-fence-hardening.md`.
+
+Shipped in 0.8.0: the four fence checks below, and `chat info`, `chat log`, `group member`, `msg get`, `msg link`, `msg thread`, `dump --topic` and `--thread`, live search as `msg search`, `user info`, `contacts list`, `dialogs show`, `draft list`, `scheduled list`, `reactions show` and `account sessions`, `privacy` and `notify`: 22 client methods and 3 raw reads, coverage 47 to 69 of 217. Left for 0.8.1, reads only, no decision record: `chat preview`, `chat similar`, `msg preview`, `msg translate` (with the fact check), `user photos`, `group invite-show`, `folders show` and `folders preview`, `account me`, `blocked`, `ttl` and `channels` with the six remaining raw reads, `poll voters`, and the long tail below. What the build showed is in D13f: `dump --topic` needs `searchMessages` after all (`getHistory` has no thread parameter in mtcute 0.27.8), `iterReactionUsers` never ends, `iterDialogs` skips archived chats, and the live search is `tg msg search` while `tg search` stays TASK-26's.
+
 Decision D13f (hardening only, widens nothing): what the fence enforces by hand-kept list today becomes enforced by derivation.
 - Raw-call tripwire: any `.call({ _: '...' })` outside `src/send/` fails unless the method is in `READ_TL_METHODS`. This closes the gap D13c admitted ("a raw `tg.call` twin would not be caught") before the phases that need raw writes.
 - Alias tripwire: destructuring or bracket access of any `WRITE_RPCS` name outside the allowlist fails.
@@ -162,8 +170,8 @@ Read verbs (all `--json`, all paced):
 | `chat log <peer> [--type] [--user]` | `getChatEventLog` (admin only: `CHAT_ADMIN_REQUIRED` is exit 3) |
 | `group member <peer> <user>` | `getChatMember` (the list read `group members` ships in 0.7.0) |
 | `msg get <peer> <ids...>`, `msg link <url>`, `msg thread <peer> <id>`, `msg preview <url>`, `msg translate` | `getMessages`, `getMessageByLink`, `getMessageGroup`, `getReplyTo`, `getDiscussionMessage`, `getFactCheck`, `getWebPagePreview`, `translateMessage`, `translateText` |
-| `dump --topic <id>` / `--thread <id>` | no new method (`replyTo` through the single fetch iterator) |
-| `search <query> [--chat] [--global] [--hashtag] [--posts] [--filter] [--from] [--since]` | `searchMessages`, `searchGlobal`, `searchHashtag`, `searchPostsGlobal`. Name collision with TASK-26 (archive search): settle `search` (live) versus `search --archive` or `grep` before release |
+| `dump --topic <id>` / `--thread <id>` | `searchMessages` with a thread id, through the paced walk (0.8.0). The first draft said "no new method"; `getHistory` has no thread parameter |
+| `msg search <query> (--chat <peer> \| --global \| --hashtag \| --posts) [--filter] [--from] [--since] [--until]` | `searchMessages`, `searchGlobal`, `searchHashtag`, `searchPostsGlobal`. Settled in D13f: the live search is `msg search`, and `tg search` stays TASK-26's archive search |
 | `user info <peer>`, `user photos`, `contacts list` | `getUser(s)`, `getFullUser`, `getPeerSettings`, `getCommonChats`, `getProfilePhoto(s)`, `getContacts` |
 | `dialogs show <peers...>`, `draft list`, `scheduled list <peer>`, `reactions show <peer> <id>` | `getPeerDialogs`, drafts from dialogs, `getAllScheduledMessages`, `getScheduledMessages`, `getMessageReactions`, `getReactionUsers` |
 | `group invite-show`, `folders show`, `folders preview <link>` | `getInviteLink`, `getPrimaryInviteLink`, `getFolders` (live definition, not the archive view), `getChatlistPreview` |
@@ -254,7 +262,7 @@ Answered by the operator on 2026-10-17 with «делай как рекоменд
 
 1. RESOLVED. The TTY-only guard class is accepted: history deletion, chat TTL and admin rights run only from an interactive terminal, `--yes` does not bypass it, unattended runs exit 3. Applied to `promote` now, in 0.7.1, not in 0.11 (`demote` only removes rights and stays under the normal gate). History deletion and TTL are not shipped; 0.11 reuses the class.
 2. RESOLVED. Separate per-day counters, not folded into the send caps: ban, unban, restrict, promote, demote, kick-member and add-members count one per person against `TG_MAX_MODERATION_PER_DAY` (default 50), logged, over cap refused with the repo's cap exit code (4); per-call limit of 20 kept. Shipped in 0.7.1. The per-day join cap stays in 0.11.
-3. STILL OPEN. Split `src/send/index.ts` by area (fence becomes a directory), or keep one file? Not covered by the 2026-10-17 answer; AC #12 still requires the decision before 0.10.
+3. RESOLVED (2026-10-17, D13f). Keep `src/send/index.ts` as one file. The instruction was to split it in 0.8.0 only if the read verbs had to touch it; they do not (the reads have their own error map in `src/reads/errors.ts`), so it is byte-for-byte unchanged. The trigger to revisit is a phase whose review cannot be done in one sitting or the file passing 2500 lines (1654 today); a split would be its own refactor pull request, with the fence becoming the prefix `send/` and eval-29, 29b, 31 and AGENTS.md updated in the same commit.
 4. RESOLVED. Business automation and session revocation are decided case by case, not a permanent never; section 6 wording updated, each needs its own decision record when asked for.
 5. RESOLVED. 0.13 (publish and extend) is deferred: built only on an explicit request. The roadmap runs to 1.0 after 0.12 without it.
 <!-- SECTION:DESCRIPTION:END -->
@@ -266,13 +274,13 @@ Answered by the operator on 2026-10-17 with «делай как рекоменд
 - [ ] #3 All write phases: the phase's decision record (D13 pattern: Decision, Why gated, Cost model, RPCs added, Safeguards, Exit codes and shapes, Explicitly out of scope, Not decided) is committed with the code; no phase raises TG_MAX_SENDS_PER_RUN or TG_MAX_SENDS_PER_DAY or weakens eval-30 and eval-31
 - [ ] #4 All write phases: every RPC is added to WRITE_RPCS or WRITE_TL_METHODS, lives only in src/send/index.ts, is tripwire-verified (inject a call elsewhere, eval-29 fails), and is tested with a mocked client and no network; new evals continue after the highest existing number
 - [ ] #5 0.7.0 (in progress on a separate worktree, tracked here only for coverage): decision D13e covers group members, ban, unban, restrict, promote and demote; banChatMember, unbanChatMember, restrictChatMember and editAdminRights are in WRITE_RPCS; the release is tagged as 0.7.0 and this task's counts (47 of 217 covered after 0.7.0) are re-checked against the verbs that actually shipped
-- [ ] #6 0.8: decision D13f is recorded and the raw-call tripwire fails the suite when a raw TL literal with a non-listed method appears outside src/send/, with READ_TL_METHODS as the only way for a raw read to pass
-- [ ] #7 0.8: an alias tripwire fails the suite when a WRITE_RPCS name is destructured or bracket-accessed outside the allowlist, and eval-31 is derived (command files and read modules such as groups/index.ts) so a new file that is neither allowlisted nor on the unattended list fails until classified
-- [ ] #8 0.8: a coverage manifest classifies every TelegramClient method in the installed mtcute (covered, planned:phase, defer, never, excluded:reason) and a test fails on any unclassified method after an mtcute upgrade
+- [x] #6 0.8: decision D13f is recorded and the raw-call tripwire fails the suite when a raw TL literal with a non-listed method appears outside src/send/, with READ_TL_METHODS as the only way for a raw read to pass
+- [x] #7 0.8: an alias tripwire fails the suite when a WRITE_RPCS name is destructured or bracket-accessed outside the allowlist, and eval-31 is derived (command files and read modules such as groups/index.ts) so a new file that is neither allowlisted nor on the unattended list fails until classified
+- [x] #8 0.8: a coverage manifest classifies every TelegramClient method in the installed mtcute (covered, planned:phase, defer, never, excluded:reason) and a test fails on any unclassified method after an mtcute upgrade
 - [ ] #9 0.8: chat info, chat log, group member, msg get, link and thread, dump --topic and --thread, search (chat, global, hashtag, posts), user info, contacts list, dialogs show, draft list, scheduled list and reactions show ship as read verbs with --json, golden-tested rendering, and exit codes 2 for zero results, 3 for CHAT_ADMIN_REQUIRED and 6 for upstream
-- [ ] #10 0.8: every new list read iterates through one shared paced helper generalised from src/messages/fetch.ts, and no second unthrottled iterator exists
+- [x] #10 0.8: every new list read iterates through one shared paced helper generalised from src/messages/fetch.ts, and no second unthrottled iterator exists
 - [ ] #11 0.8: account me, sessions, privacy, notify, blocked, ttl and channels use only the nine raw reads in READ_TL_METHODS, and the live search verb name is settled with TASK-26 before release
-- [ ] #12 0.8: the decision on splitting src/send/index.ts by area (fence as a directory versus one file) is recorded before 0.10 starts
+- [x] #12 0.8: the decision on splitting src/send/index.ts by area (fence as a directory versus one file) is recorded before 0.10 starts
 - [ ] #13 0.8.x: stories, stickers, boosts, stars, gifts and business-link reads ship as patch releases with no decision record, and the stories reads never call incrementStoriesViews or readStories
 - [ ] #14 0.9: decision D13g is recorded for drafts, folders, contacts, block and reaction-read marks; importContacts and deleteContacts move from src/contacts/import.ts into src/send/ and the contacts/import.ts entry leaves WRITE_ALLOWLIST with eval-29 green
 - [ ] #15 0.9: draft set refuses to overwrite an existing draft without --replace, never logs text and never clears all drafts; the audit line records the new kind with size only
@@ -299,4 +307,14 @@ Answered by the operator on 2026-10-17 with «делай как рекоменд
 
 <!-- SECTION:NOTES:BEGIN -->
 2026-10-17: open questions answered by the operator ("делай как рекомендуешь"): TTY-only guard class accepted and applied to promote now (0.7.1), separate per-day moderation counter (default 50, exit 4), business automation and session revocation decided case by case, 0.13 deferred. Question 3 (split src/send/index.ts) was not covered and stays open. Recorded in backlog/decisions/2026-10-17-tty-only-guard-and-moderation-counter.md (D13e-a); ACs 23, 24, 29 and 31 reworded to match.
+
+2026-10-17: phase 0.8 first part built as 0.8.0 on branch feat/reads-0.8.0 (operator: "делай как рекомендуешь"). Decision record D13f: backlog/decisions/2026-10-17-core-reads-and-fence-hardening.md. Evidence: pnpm test 260 passing (evals 175-200 new), typecheck, lint, build and the package-contents check green locally.
+
+Checked: AC 6 (raw-call tripwire, eval-175, READ_TL_METHODS), AC 7 (alias tripwire eval-176, eval-31 derived from the module graph with COMMAND_CLASS, import walk from the syntax tree eval-177), AC 8 (coverage manifest test/coverage-manifest.ts, eval-178 to 180: 307 methods, 90 excluded, 217 in scope, 69 covered), AC 10 (paced() in src/messages/fetch.ts; eval-181 fails on any iter* call outside paced(), peers/index.ts the one named exception), AC 12 (D13f: send/index.ts stays one file, trigger to revisit named).
+
+Left unchecked on purpose. AC 9: every verb in the list ships with --json, golden-tested rendering and exit 3 for CHAT_ADMIN_REQUIRED and 6 for upstream, but "2 for zero results" is implemented for lookups and searches only (msg get, msg search, group member, reactions show); an empty listing (draft list, scheduled list, contacts list, chat log) prints that it is empty and exits 0, as every shipped listing does (eval-137) and as AGENTS.md says of a needle that matched nothing. D13f records the reasoning; the operator can overrule with one line in AGENTS.md and one test. AC 11: account sessions, privacy and notify ship (raw account.getAuthorizations, getPrivacy, getNotifySettings on READ_TL_METHODS); account me, blocked, ttl and channels and the other six raw reads are 0.8.1. The live search name is settled (tg msg search; tg search stays TASK-26's).
+
+0.8.1 (reads only, no decision record): chat preview and similar, msg preview, msg translate and fact check, user photos, group invite-show, folders show and preview, account me, blocked, ttl, channels, poll voters, and the long tail (stories, stickers, boosts, Stars, gifts, business links, saved music). In the manifest these are the 40 methods marked planned:0.8.1.
+
+Findings for the next phases, in D13f: getHistory has no thread parameter in mtcute 0.27.8 (dump --topic goes through searchMessages); iterReactionUsers never ends (reactions show pages getReactionUsers by hand); iterDialogs skips archived chats by default; FullChat.membersCount reads 0 for a basic group; the hand count had never 25 and defer 20 where section 6 makes 29 and 16 (the manifest follows section 6).
 <!-- SECTION:NOTES:END -->

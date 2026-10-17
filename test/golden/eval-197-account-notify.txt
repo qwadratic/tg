@@ -1,0 +1,4 @@
+private chats        muted no, previews off
+groups               muted until 2026-09-27T09:06, previews default, silent
+channels             muted forever, previews default, stories muted
+chat -1001234567890  muted no, previews on

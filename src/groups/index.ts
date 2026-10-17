@@ -1,5 +1,6 @@
-import type { TelegramClient } from '@mtcute/node'
-import { adminRightNames } from './rights.js'
+import type { ChatMember, TelegramClient } from '@mtcute/node'
+import { reading } from '../reads/errors.js'
+import { adminRightNames, restrictionNames } from './rights.js'
 
 /**
  * The READ half of group/channel administration.
@@ -69,10 +70,10 @@ export async function listInviteLinks(
   chatId: number,
   options: { revoked?: boolean | undefined; limit?: number | undefined } = {}
 ): Promise<InviteLinkRow[]> {
-  const links = await tg.getInviteLinks(chatId, {
+  const links = await reading(() => tg.getInviteLinks(chatId, {
     ...(options.revoked ? { revoked: true } : {}),
     ...(options.limit === undefined ? {} : { limit: options.limit })
-  })
+  }))
 
   return [...links].map((link) => ({
     link: link.link,
@@ -91,10 +92,10 @@ export async function listInviteLinkMembers(
   chatId: number,
   options: { link?: string | undefined; limit?: number | undefined } = {}
 ): Promise<InviteMemberRow[]> {
-  const members = await tg.getInviteLinkMembers(chatId, {
+  const members = await reading(() => tg.getInviteLinkMembers(chatId, {
     ...(options.link ? { link: options.link } : {}),
     ...(options.limit === undefined ? {} : { limit: options.limit })
-  })
+  }))
 
   return [...members].map((member) => ({
     userId: member.user.id,
@@ -122,13 +123,18 @@ export async function listChatMembers(
     query?: string | undefined
   } = {}
 ): Promise<ChatMemberRow[]> {
-  const members = await tg.getChatMembers(chatId, {
+  const members = await reading(() => tg.getChatMembers(chatId, {
     ...(options.limit === undefined ? {} : { limit: options.limit }),
     ...(options.type === undefined ? {} : { type: options.type }),
     ...(options.query === undefined ? {} : { query: options.query })
-  })
+  }))
 
-  return [...members].map((member) => ({
+  return [...members].map(memberRow)
+}
+
+/** One member, flattened the same way for a list and for a single lookup. */
+function memberRow(member: ChatMember): ChatMemberRow {
+  return {
     userId: member.user.id,
     name: member.user.displayName,
     username: member.user.username ?? null,
@@ -136,7 +142,46 @@ export async function listChatMembers(
     rank: member.title ?? '',
     rights: member.status === 'admin' || member.status === 'creator' ? adminRightNames(member.permissions) : [],
     joined: minute(member.joinedDate)
-  }))
+  }
+}
+
+/** One member in full: the row, plus who put them there and what they may not do. */
+export interface ChatMemberDetail extends ChatMemberRow {
+  invitedBy: string | null
+  promotedBy: string | null
+  restrictedBy: string | null
+  /** Kebab-case abilities taken away, for a restricted member; empty otherwise. */
+  restrictions: string[]
+  /** ISO to the minute when a restriction or ban ends; '' when it does not, or when there is none. */
+  until: string
+}
+
+const by = (user: { id: number; displayName: string } | null): string | null =>
+  user ? `${user.displayName} [id ${user.id}]` : null
+
+/**
+ * One person's standing in one chat, or null when they are not in it.
+ *
+ * `group members` lists up to 200 of them; this answers "is that person here, and
+ * what are they", which the list cannot do for a large chat. A READ: it lives here
+ * and not in `src/send/` for the reason `listChatMembers` does.
+ */
+export async function getChatMemberDetail(
+  tg: TelegramClient,
+  chatId: number,
+  userId: number
+): Promise<ChatMemberDetail | null> {
+  const member = await reading(() => tg.getChatMember({ chatId, userId }))
+  if (!member) return null
+
+  return {
+    ...memberRow(member),
+    invitedBy: by(member.invitedBy),
+    promotedBy: by(member.promotedBy),
+    restrictedBy: by(member.restrictedBy),
+    restrictions: restrictionNames(member.restrictions?.raw),
+    until: minute(member.restrictions?.untilDate)
+  }
 }
 
 /** Topics in a forum supergroup. */
@@ -145,9 +190,9 @@ export async function listForumTopics(
   chatId: number,
   options: { limit?: number | undefined } = {}
 ): Promise<ForumTopicRow[]> {
-  const topics = await tg.getForumTopics(chatId, {
+  const topics = await reading(() => tg.getForumTopics(chatId, {
     ...(options.limit === undefined ? {} : { limit: options.limit })
-  })
+  }))
 
   return [...topics].map((topic) => ({
     id: topic.id,
@@ -222,4 +267,19 @@ export function renderForumTopics(rows: ForumTopicRow[]): string {
       ])
     )
     .join('\n')}\n`
+}
+
+/** One member in full, as lines. Pure, so a golden can pin it. */
+export function renderChatMember(row: ChatMemberDetail): string {
+  const handle = row.username ? ` (@${row.username})` : ''
+  const lines = [`${row.name}${handle} [id ${row.userId}]  ${row.status}${row.rank ? `  "${row.rank}"` : ''}`]
+  if (row.rights.length > 0) lines.push(`  rights: ${row.rights.join(',')}`)
+  if (row.restrictions.length > 0) {
+    lines.push(`  may not: ${row.restrictions.join(',')}${row.until ? ` until ${row.until}` : ''}`)
+  }
+  if (row.joined) lines.push(`  joined ${row.joined}`)
+  if (row.invitedBy) lines.push(`  invited by ${row.invitedBy}`)
+  if (row.promotedBy) lines.push(`  promoted by ${row.promotedBy}`)
+  if (row.restrictedBy) lines.push(`  restricted by ${row.restrictedBy}`)
+  return `${lines.join('\n')}\n`
 }

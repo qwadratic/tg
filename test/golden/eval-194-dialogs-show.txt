@@ -1,0 +1,4 @@
+Ada [id 7] user  pinned, 3 unread
+    last 2026-10-01T09:30: see you tomorrow
+Team chat [id -1001234567890] chat  muted, archived, mentions 1, draft, auto-delete 604800s
+    no messages

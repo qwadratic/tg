@@ -1,0 +1,21 @@
+#30 [2026-10-01T09:30] Ada: newest
+    reply to #20
+    https://t.me/c/1234567890/30
+
+replies to (nearest first):
+#20 [2026-10-01T09:30] Ada: middle
+    reply to #10
+    https://t.me/c/1234567890/20
+#10 [2026-10-01T09:30] Ada: oldest
+    reply to #5
+    https://t.me/c/1234567890/10
+
+#50 [2026-10-01T09:30] Ada: a post (3 replies)
+    https://t.me/c/1234567890/50
+
+the rest of its album:
+#51 [2026-10-01T09:30] Ada: second photo <photo>
+    https://t.me/c/1234567890/51
+
+comments: discussion chat -1009876543210, message #77
+  read them with: tg dump -1009876543210 --thread 77

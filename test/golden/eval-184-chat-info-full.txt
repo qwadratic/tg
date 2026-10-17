@@ -1,0 +1,8 @@
+Team chat (supergroup) @teamchat [id -1001234567890]
+  forum, content protected, join to send
+  1,204 members, 6 admins, 87 online, 3 banned
+  usernames: @teamchat @team_old
+  slow mode 30s, auto-delete 86400s, linked chat -1009999, pinned message #12, 2 join requests waiting
+  you: admin, 14 unread
+  created 2024-02-03T10:00, joined 2024-02-04T09:00
+  description: Where the work happens. Be kind.

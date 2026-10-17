@@ -15,6 +15,15 @@ import { registerPeersCommand } from './cli/commands/peers.js'
 import { registerDumpCommand } from './cli/commands/dump.js'
 import { registerMediaCommand } from './cli/commands/media.js'
 import { registerWatchCommand } from './cli/commands/watch.js'
+import { registerChatCommand } from './cli/commands/chat.js'
+import { registerMsgCommand } from './cli/commands/msg.js'
+import { registerUserCommand } from './cli/commands/user.js'
+import { registerContactsCommand } from './cli/commands/contacts.js'
+import { registerDialogsCommand } from './cli/commands/dialogs.js'
+import { registerDraftCommand } from './cli/commands/draft.js'
+import { registerScheduledCommand } from './cli/commands/scheduled.js'
+import { registerReactionsCommand } from './cli/commands/reactions.js'
+import { registerAccountCommand } from './cli/commands/account.js'
 import { registerSendCommand } from './cli/commands/send.js'
 import { registerGroupCommand } from './cli/commands/group.js'
 import { registerUpdateCommand } from './cli/commands/update.js'
@@ -40,6 +49,19 @@ registerPeersCommand(program)
 registerDumpCommand(program)
 registerMediaCommand(program)
 registerWatchCommand(program)
+
+// Read verbs of 0.8 (D13f): what a chat is, messages by id, link, thread and
+// search, people, the chat list, drafts, scheduled messages, reactions and the
+// account's own settings. None of them can reach `src/send/` (eval-31).
+registerChatCommand(program)
+registerMsgCommand(program)
+registerUserCommand(program)
+registerContactsCommand(program)
+registerDialogsCommand(program)
+registerDraftCommand(program)
+registerScheduledCommand(program)
+registerReactionsCommand(program)
+registerAccountCommand(program)
 
 // Archiving: `sync chats`, `sync recent`, `sync historical`.
 registerSyncCommand(program)

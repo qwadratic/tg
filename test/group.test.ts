@@ -249,10 +249,11 @@ test('eval-135 the group command layer gates on --yes before opening a session',
   const reads = actions.filter((body) => !body.includes('assertConfirmed'))
 
   assert.ok(writes.length >= 25, `expected the write actions, found ${writes.length}`)
-  // Four reads, and they are reads BECAUSE they call no write RPC.
-  assert.equal(reads.length, 4, 'only invite-list, invite-members, members and topic-list may skip the gate')
+  // Five reads, and they are reads BECAUSE they call no write RPC. `member` (D13f)
+  // is the fifth: one person's standing, through the read module like the rest.
+  assert.equal(reads.length, 5, 'only invite-list, invite-members, members, member and topic-list may skip the gate')
   for (const body of reads) {
-    assert.ok(/list(InviteLinks|InviteLinkMembers|ChatMembers|ForumTopics)\(/.test(body), 'an ungated action must be a read')
+    assert.ok(/(list(InviteLinks|InviteLinkMembers|ChatMembers|ForumTopics)|getChatMemberDetail)\(/.test(body), 'an ungated action must be a read')
   }
 
   for (const body of writes) {
@@ -1028,7 +1029,15 @@ test('eval-161 the moderation verbs name every person in the prompt and pass onl
 
   // People are numeric ids, parsed once, in one place.
   assert.ok(source.includes('parsePersonId('))
-  assert.ok(!/parsePeerRef\(user\b/.test(source), 'a person is never parsed as a chat reference')
+  // ...in every WRITE. A read (`member`, D13f) may take a handle or `me`, because
+  // reading a person needs only the resolve-then-show rule and changes nothing.
+  const writeActions = [...source.matchAll(/\.action\(async \([^)]*\) => \{([\s\S]*?)\n {6}\}\)/g)]
+    .map((m) => m[1]!)
+    .filter((body) => body.includes('assertConfirmed'))
+  assert.ok(writeActions.length >= 25)
+  for (const body of writeActions) {
+    assert.ok(!/parsePeerRef\(user\b/.test(body), 'a person is never parsed as a chat reference in a write')
+  }
 })
 
 test('eval-162 the moderation verbs work through the real CLI: usage and gate refusals exit with the contract codes', async () => {
