@@ -42,10 +42,12 @@ import {
 } from '../../send/index.js'
 import { assertConfirmed, assertUnderModerationCap } from '../../send/gate.js'
 import {
+  getChatMemberDetail,
   listChatMembers,
   listForumTopics,
   listInviteLinkMembers,
   listInviteLinks,
+  renderChatMember,
   renderChatMembers,
   renderForumTopics,
   renderInviteLinks,
@@ -58,7 +60,7 @@ import { OperatorError } from '../../errors.js'
 import { EXIT } from '../../exit-codes.js'
 import { canPrompt } from '../../session/index.js'
 import { logSummary } from '../log.js'
-import { withAuthenticatedClient } from './shared.js'
+import { notFound, printResult, requireChat, requirePerson, resolveReadPeer, withAuthenticatedClient } from './shared.js'
 
 /**
  * `tg group` - chat administration.
@@ -1005,6 +1007,30 @@ export function registerGroupCommand(program: Command): void {
           }
           process.stdout.write(renderChatMembers(rows))
         })
+      })
+    })
+
+  group
+    .command('member <peer> <user>')
+    .description("Show one person's standing in a chat: role, rights, who invited or promoted them (read-only; the user is an id, @username or me)")
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, user: string, options: { json?: boolean }) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        parsePeerRef(user)
+
+        const { target, who, row } = await withAuthenticatedClient(async (tg) => {
+          const target = await resolveReadPeer(tg, peer, 'reading')
+          requireChat(target, 'tg group member', `tg user info ${target.id}`)
+          const who = await resolveReadPeer(tg, user, 'looking up')
+          requirePerson(who, 'tg group member', `tg chat info ${who.id}`)
+          return { target, who, row: await getChatMemberDetail(tg, target.id, who.id) }
+        })
+
+        // Not being in the chat is the answer to the question, but an exit code 0
+        // would read as "found": asking about someone who is not there is usage (2).
+        if (!row) throw notFound(`${describePeer(who)} is not a member of ${describePeer(target)}.`)
+        printResult(options.json, row, () => renderChatMember(row))
       })
     })
 

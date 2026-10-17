@@ -1,0 +1,6 @@
+#9 [2026-11-01T09:00] Ada: sooner
+    scheduled
+    https://t.me/c/1234567890/9
+#8 [2026-12-01T09:00] Ada: later
+    scheduled
+    https://t.me/c/1234567890/8

@@ -1,5 +1,6 @@
 import type { Message, TelegramClient } from '@mtcute/node'
 import { fetchMessages } from '../messages/fetch.js'
+import { reading } from '../reads/errors.js'
 
 /**
  * Flat, chronological transcript of one chat.
@@ -108,6 +109,12 @@ export interface DumpOptions {
   limit?: number | undefined
   /** Stop at messages older than this. */
   since?: Date | undefined
+  /**
+   * Read one thread: a forum topic (its first message id) or the replies under a
+   * message. Goes through the same paced walk as the whole history, with a search
+   * in place of `getHistory`, which has no thread parameter.
+   */
+  threadId?: number | undefined
 }
 
 /**
@@ -122,11 +129,16 @@ export async function dumpThread(
   chatId: number,
   options: DumpOptions = {}
 ): Promise<DumpLine[]> {
+  return reading(() => dumpLines(tg, chatId, options))
+}
+
+async function dumpLines(tg: TelegramClient, chatId: number, options: DumpOptions): Promise<DumpLine[]> {
   const lines: DumpLine[] = []
 
   for await (const msg of fetchMessages(tg, chatId, {
     limit: options.limit,
-    since: options.since
+    since: options.since,
+    threadId: options.threadId
   })) {
     const text = (msg.text ?? '').trim()
     const media = (msg.media as unknown as { type?: string } | undefined)?.type ?? ''

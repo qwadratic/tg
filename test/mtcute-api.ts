@@ -68,8 +68,3 @@ export function tlRpcMethods(): Set<string> {
   return methods
 }
 
-/** Used by tests that need to resolve a path inside the repo. */
-export function repoPath(...parts: string[]): string {
-  return join(fileURLToPath(new URL('../', import.meta.url)), ...parts)
-}
-

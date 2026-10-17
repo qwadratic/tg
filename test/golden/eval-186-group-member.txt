@@ -1,0 +1,9 @@
+Bo Li (@boli) [id 42]  restricted
+  may not: send-messages,send-media until 2026-12-31T00:00
+  joined 2026-08-01T10:00
+  invited by Ada [id 7]
+  restricted by Cy [id 8]
+
+Di [id 9]  admin  "Mod"
+  rights: delete-messages,ban-users
+  promoted by Ada [id 7]

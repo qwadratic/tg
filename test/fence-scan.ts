@@ -378,3 +378,40 @@ export function closureOf(graph: ReadonlyMap<string, string[]>, entries: string[
   }
   return seen
 }
+
+/* ------------------------------------------------------------ paced walks */
+
+/**
+ * Every `iter*` method of the client that is called outside a `paced(...)` call.
+ *
+ * AC 10 of TASK-43 says every list read walks through one shared paced helper and
+ * no second, unthrottled reader exists: "a second reader is how an account gets
+ * limited". The iterator must be named INSIDE the arguments of `paced(...)`, which
+ * is what sets the speed, so a new `for await (const x of tg.iterFoo())` is a
+ * violation however it is spelled. Files in `allowed` are exceptions the test
+ * names and explains.
+ */
+export function unpacedIterators(files: SourceText[], allowed: ReadonlySet<string>): string[] {
+  const violations: string[] = []
+
+  for (const file of files) {
+    if (allowed.has(file.path)) continue
+    const sf = parse(file)
+
+    walk(sf, (node) => {
+      if (!ts.isCallExpression(node)) return
+      const callee = node.expression
+      const name = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isElementAccessExpression(callee) ? literalText(callee.argumentExpression) : null
+      if (name === null || !/^iter[A-Z]/.test(name)) return
+
+      for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
+        if (ts.isCallExpression(parent) && ts.isIdentifier(parent.expression) && parent.expression.text === 'paced') return
+        // The walk's own boundary: a function body is a different scope.
+        if (ts.isFunctionLike(parent) || ts.isSourceFile(parent)) break
+      }
+      violations.push(`${where(sf, node)}: ${name}() is not walked by paced()`)
+    })
+  }
+
+  return violations
+}

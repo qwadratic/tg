@@ -5,7 +5,8 @@ import { loadConfig } from '../../config/index.js'
 import chalk from 'chalk'
 import { OperatorError } from '../../errors.js'
 import { EXIT } from '../../exit-codes.js'
-import { describePeer, resolvePeerRef } from '../../peers/ref.js'
+import { describePeer, resolvePeerRef, type ResolvedPeer } from '../../peers/ref.js'
+import { peerKindOf } from '../../peers/id.js'
 
 /**
  * Format duration in milliseconds to human-readable string.
@@ -102,3 +103,49 @@ export async function resolveExportConfig(tg: TelegramClient) {
   return refreshed.config
 }
 
+
+/**
+ * Resolve the chat a read verb should act on, and say out loud which one it is.
+ *
+ * The same resolve-then-show rule as `resolveTarget` (D17), for the verbs that
+ * require a peer: the identity goes to stderr so a `--json` payload on stdout
+ * stays pipeable.
+ */
+export async function resolveReadPeer(tg: TelegramClient, raw: string, verb: string): Promise<ResolvedPeer> {
+  const target = await resolvePeerRef(tg, raw)
+  console.error(chalk.dim(`${verb} ${describePeer(target)}`))
+  return target
+}
+
+/** Refuse a person where a group or channel is needed, before any request is spent. */
+export function requireChat(target: ResolvedPeer, verb: string, instead: string): void {
+  if (peerKindOf(target.id) === 'person') {
+    throw new OperatorError(
+      `${describePeer(target)} is a person, and \`${verb}\` reads a group or channel. Use: ${instead}`,
+      EXIT.usage
+    )
+  }
+}
+
+/** Refuse a group or channel where a person is needed. */
+export function requirePerson(target: ResolvedPeer, verb: string, instead: string): void {
+  if (peerKindOf(target.id) !== 'person') {
+    throw new OperatorError(
+      `${describePeer(target)} is a group or channel, and \`${verb}\` reads a person. Use: ${instead}`,
+      EXIT.usage
+    )
+  }
+}
+
+/**
+ * Print what a read found, to stdout: the JSON payload with `--json`, otherwise the
+ * text. Nothing else goes to stdout, so `... --json | jq` always parses.
+ */
+export function printResult(json: boolean | undefined, payload: unknown, text: () => string): void {
+  process.stdout.write(json ? `${JSON.stringify(payload, null, 2)}\n` : text())
+}
+
+/** A lookup that found nothing: the thing asked for does not exist, which is usage (2), not a broken workspace. */
+export function notFound(message: string): OperatorError {
+  return new OperatorError(message, EXIT.usage)
+}

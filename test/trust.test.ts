@@ -38,6 +38,7 @@ import {
   loadSources,
   rawCallViolations,
   rawMethodsNamed,
+  unpacedIterators,
   type SourceText
 } from './fence-scan.js'
 import { clientMethodNames, tlRpcMethods } from './mtcute-api.js'
@@ -165,7 +166,12 @@ const WRITE_TL_METHODS = [
  * the schema. Adding a raw read means adding it here, in the manifest, and in the
  * verb's tests.
  */
-const READ_TL_METHODS: readonly string[] = []
+const READ_TL_METHODS: readonly string[] = [
+  // `tg account sessions`, `privacy` and `notify` (D13f).
+  'account.getAuthorizations',
+  'account.getPrivacy',
+  'account.getNotifySettings'
+]
 
 /**
  * Files permitted to name a write RPC, each with the reason it is fenced.
@@ -272,6 +278,16 @@ const COMMAND_CLASS: Record<string, 'write' | 'legacy-write' | 'unattended' | 'r
   'media.ts': 'read',
   'peers.ts': 'read',
   'watch.ts': 'read',
+  // The read verbs of 0.8 (D13f).
+  'chat.ts': 'read',
+  'msg.ts': 'read',
+  'user.ts': 'read',
+  'contacts.ts': 'read',
+  'dialogs.ts': 'read',
+  'draft.ts': 'read',
+  'scheduled.ts': 'read',
+  'reactions.ts': 'read',
+  'account.ts': 'read',
   'auth.ts': 'plumbing',
   'session.ts': 'plumbing',
   'init.ts': 'plumbing',
@@ -1106,4 +1122,31 @@ test('eval-180 what is never added is nowhere in src/, client method or raw TL',
   for (const { method } of raw) {
     assert.ok(!UNSUPPORTED_TL_PREFIXES.some((prefix) => method.startsWith(prefix)), `${method} is unsupported (calls need a media stack)`)
   }
+})
+
+test('eval-181 every list read of Telegram goes through the one paced walk', () => {
+  // peers/index.ts walks dialogs directly. It predates the helper, it is bounded
+  // by --limit, and pacing it would add 1.5s per hundred dialogs to every
+  // `peers find`; it is named here so it cannot be copied, not because it is right.
+  const exceptions = new Set(['peers/index.ts'])
+  const check = (source: string, path = 'cli/commands/x.ts') => unpacedIterators([synthetic(path, source)], exceptions)
+
+  // A second reader, in every spelling.
+  assert.equal(check('for await (const m of tg.iterHistory(chat)) use(m)').length, 1)
+  assert.equal(check('const walk = tg.iterSearchMessages({ query })\nfor await (const m of walk) use(m)').length, 1)
+  assert.equal(check("for await (const m of tg['iterDialogs']({})) use(m)").length, 1)
+  assert.equal(check('for await (const m of readingEach(tg.iterChatEventLog(chat))) use(m)').length, 1, 'wrapped, but not paced')
+  assert.equal(check('const f = () => paced(x)\nfor await (const m of tg.iterHistory(chat)) use(m)').length, 1, 'a paced call elsewhere is not enough')
+
+  // The only accepted shapes: the iterator is an argument of paced(), at any depth.
+  assert.deepEqual(check('for await (const m of paced(tg.iterHistory(chat), { limit: 5 })) use(m)'), [])
+  assert.deepEqual(check('for await (const m of paced(readingEach(tg.iterChatEventLog(chat)), {})) use(m)'), [])
+  assert.deepEqual(check('yield* paced(a ? tg.iterHistory(chat) : tg.iterSearchMessages({ chatId }), {})'), [])
+  assert.deepEqual(check('const x = foo.iterable'), [], 'only iter* CALLS are readers')
+  assert.deepEqual(check('for await (const m of tg.iterDialogs({}))', 'peers/index.ts'), [], 'the named exception')
+
+  // The real tree, and an injected second reader.
+  assert.deepEqual(unpacedIterators(SOURCES, exceptions), [])
+  assert.ok(SOURCES.some((f) => /\.iter[A-Z]\w*\(/.test(f.source)), 'no iterator found at all, so the scan passes for the wrong reason')
+  assert.equal(unpacedIterators([...SOURCES, synthetic('messages/second-reader.ts', 'export const go = (tg) => tg.iterHistory(1)')], exceptions).length, 1)
 })

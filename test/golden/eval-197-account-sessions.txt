@@ -1,0 +1,7 @@
+2026-10-17/work@vm - mtcute 0.8.0 (Linux 6.1)  THIS SESSION
+    203.0.113.9, Vienna, AT  created 2026-09-21T14:13, last active 2026-09-22T18:00
+laptop - tg 0.8.0 (Linux 6.1)  unconfirmed, password pending, official app
+    location unknown  created 2026-09-21T14:13, last active 2026-09-22T18:00
+phone - tg 0.8.0 (Linux 6.1)
+    203.0.113.9, Vienna, AT  created 2026-09-21T14:13, last active 2026-05-28T20:26
+Telegram ends a session left unused for 183 days.

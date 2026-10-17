@@ -3,8 +3,9 @@ import chalk from 'chalk'
 import { dumpThread, renderDump } from '../../dump/index.js'
 import { runCommand, handlePlainError } from '../errors.js'
 import { OperatorError } from '../../errors.js'
+import { EXIT } from '../../exit-codes.js'
 import { withAuthenticatedClient } from './shared.js'
-import { parseSince } from '../args.js'
+import { parseMessageIds, parseSince } from '../args.js'
 import { describePeer, parsePeerRef, resolvePeerRef } from '../../peers/ref.js'
 
 /**
@@ -19,8 +20,10 @@ export function registerDumpCommand(program: Command): void {
     .description('Print one chat as a flat chronological transcript (id, @username, t.me link or me)')
     .option('--since <date>', 'Stop at messages older than this')
     .option('--limit <n>', 'Maximum messages to read', '600')
+    .option('--topic <id>', "Read one forum topic only; its id is the topic's first message id (see: tg group topic-list)")
+    .option('--thread <id>', 'Read only the replies under one message: a reply thread, or the comments of a post in its discussion chat')
     .option('--json', 'Machine-readable output')
-    .action(async (peer: string, options: { since?: string; limit: string; json?: boolean }) => {
+    .action(async (peer: string, options: { since?: string; limit: string; topic?: string; thread?: string; json?: boolean }) => {
       await runCommand(async () => {
         // Validate every argument BEFORE opening a session. Otherwise a typo in
         // --since costs a connection and the single-instance lock, and reports
@@ -34,14 +37,20 @@ export function registerDumpCommand(program: Command): void {
         if (!Number.isFinite(limit) || limit <= 0) {
           throw new OperatorError(`--limit must be a positive number, got ${options.limit}`)
         }
+        if (options.topic !== undefined && options.thread !== undefined) {
+          throw new OperatorError('Give --topic or --thread, not both: a topic IS a thread, named by its first message.', EXIT.usage)
+        }
+        const threadFlag = options.topic !== undefined ? '--topic' : '--thread'
+        const threadRaw = options.topic ?? options.thread
+        const [threadId] = threadRaw === undefined ? [undefined] : parseMessageIds([threadRaw], 1, threadFlag)
 
         const lines = await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
           // stderr, so the payload on stdout stays pipeable. The operator sees
           // WHICH chat this actually was, which is the check that a username or
           // a bare id cannot give them by itself.
-          console.error(chalk.dim(`reading ${describePeer(target)}`))
-          return dumpThread(tg, target.id, { limit, since })
+          console.error(chalk.dim(`reading ${describePeer(target)}${threadId === undefined ? '' : `, ${threadFlag.slice(2)} ${threadId}`}`))
+          return dumpThread(tg, target.id, { limit, since, threadId })
         })
 
         process.stdout.write(

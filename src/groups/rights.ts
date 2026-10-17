@@ -77,3 +77,15 @@ export function adminRightNames(rights: AdminRights | null | undefined): AdminRi
   if (!rights) return []
   return (Object.keys(ADMIN_RIGHTS) as AdminRightName[]).filter((name) => rights[ADMIN_RIGHTS[name]] === true)
 }
+
+/**
+ * The kebab names of the restrictions that are set, in the vocabulary's own order.
+ *
+ * Set means DISALLOWED, the sense Telegram uses (see {@link RESTRICTIONS}). A read of
+ * a restricted member prints what they may not do; `view-messages` is not in the
+ * vocabulary because that is a ban and the member's status already says banned.
+ */
+export function restrictionNames(rights: Restrictions | null | undefined): RestrictionName[] {
+  if (!rights) return []
+  return (Object.keys(RESTRICTIONS) as RestrictionName[]).filter((name) => rights[RESTRICTIONS[name]] === true)
+}

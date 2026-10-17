@@ -1,0 +1,6 @@
+CHAT_ADMIN_REQUIRED -> This account is not an admin in that chat, and Telegram only answers an admin. A human must grant admin rights first.
+CHANNEL_PRIVATE -> That channel or supergroup is private, and this account is not in it (or was removed).
+PEER_ID_INVALID -> Telegram does not know that chat (PEER_ID_INVALID). Find the id with: tg peers find <name>
+TOPIC_ID_INVALID -> That is not a topic or thread of this chat. A forum topic is named by its first message id: tg group topic-list <chat>
+BROADCAST_FORBIDDEN -> Telegram does not say who reacted in a broadcast channel: reactions there are anonymous.
+PEER_FLOOD -> Telegram is throttling this account for too many requests. Wait a while before retrying.

@@ -29,3 +29,17 @@ export function assertPeerId(raw: string | number): number {
   }
   return id
 }
+
+/** What a marked peer id is, from the id alone, with no round trip. */
+export type PeerKind = 'person' | 'legacy-group' | 'channel'
+
+/**
+ * Telegram's marked ids carry the kind in their range: a person is positive, a
+ * legacy group is a small negative, and a supergroup or channel sits below -10^12
+ * (`-100...`). Read verbs use it to say "that is a person, use `tg user info`"
+ * before spending a request.
+ */
+export function peerKindOf(id: number): PeerKind {
+  if (id > 0) return 'person'
+  return id <= -1_000_000_000_000 ? 'channel' : 'legacy-group'
+}

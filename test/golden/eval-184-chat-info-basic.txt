@@ -1,0 +1,6 @@
+Team chat (supergroup) @teamchat [id -1001234567890]
+  forum, content protected, join to send
+  1,204 members
+  usernames: @teamchat @team_old
+  you: admin
+  created 2024-02-03T10:00, joined 2024-02-04T09:00
