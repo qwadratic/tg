@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import assert from 'node:assert'
 import type { Message, TelegramClient } from '@mtcute/node'
+import { recordSend, type SentRecord } from '../src/send/gate.js'
 
 const GOLDEN_DIR = fileURLToPath(new URL('./golden/', import.meta.url))
 
@@ -128,5 +129,61 @@ export async function withTempDir<T>(fn: (dir: string) => Promise<T> | T): Promi
   } finally {
     process.chdir(originalCwd)
     rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Run `fn` with a chosen answer to "is somebody at a terminal": stdin a TTY or
+ * not, `TG_NON_INTERACTIVE=1` set or not. Restores everything afterwards, even
+ * on a throw.
+ *
+ * `tsx --test` has no terminal, and a developer running one file by hand may
+ * have one, so a test about the interactive rules must not inherit either
+ * answer: it states the one it means. Only the library layer is driven this
+ * way. Nothing here opens a session or prompts, because every Telegram call in
+ * these tests is a mock.
+ */
+export async function withTerminalState<T>(
+  state: { tty: boolean; nonInteractive?: boolean },
+  fn: () => Promise<T> | T
+): Promise<T> {
+  const tty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY')
+  const names = ['TG_NON_INTERACTIVE', 'TGU_NON_INTERACTIVE']
+  const saved = names.map((name) => [name, process.env[name]] as const)
+
+  Object.defineProperty(process.stdin, 'isTTY', { value: state.tty, configurable: true })
+  for (const name of names) delete process.env[name]
+  if (state.nonInteractive) process.env.TG_NON_INTERACTIVE = '1'
+
+  try {
+    return await fn()
+  } finally {
+    if (tty) Object.defineProperty(process.stdin, 'isTTY', tty)
+    else delete (process.stdin as { isTTY?: boolean }).isTTY
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+}
+
+/** A human at a terminal: a TTY on stdin, nothing forcing non-interactive. */
+export const withTerminal = <T>(fn: () => Promise<T> | T): Promise<T> => withTerminalState({ tty: true }, fn)
+
+/** Nobody there: no TTY on stdin, and `TG_NON_INTERACTIVE=1` as an agent is told to set. */
+export const withoutTerminal = <T>(fn: () => Promise<T> | T): Promise<T> =>
+  withTerminalState({ tty: false, nonInteractive: true }, fn)
+
+/**
+ * Write `count` moderation audit lines into this workspace's send log, as if
+ * that many people had been acted on `hoursAgo` hours ago. Zero send units, one
+ * person per line, exactly what a real ban leaves behind.
+ */
+export function seedModerationLog(count: number, hoursAgo = 1, kind: SentRecord['kind'] = 'ban-member'): void {
+  const at = new Date(Date.now() - hoursAgo * 60 * 60 * 1000).toISOString()
+  for (let i = 0; i < count; i++) {
+    recordSend({
+      at, peerId: -1001234567890, kind, targetUserId: 1000 + i, messageId: 0, size: 0, units: 0, ok: true
+    })
   }
 }

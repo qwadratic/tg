@@ -40,7 +40,7 @@ import {
   type MemberBatchResult,
   type SentRecord
 } from '../../send/index.js'
-import { assertConfirmed } from '../../send/gate.js'
+import { assertConfirmed, assertUnderModerationCap } from '../../send/gate.js'
 import {
   listChatMembers,
   listForumTopics,
@@ -76,8 +76,14 @@ import { withAuthenticatedClient } from './shared.js'
  * name, handle and id, and people are numeric ids only.
  *
  * The write verbs share the send machinery exactly: numeric peer id, the --yes
- * gate before any session is opened, the audit log. They cost zero cap units,
- * because the caps bound delivered messages and these deliver none.
+ * gate before any session is opened, the audit log. They cost zero SEND units,
+ * because the send caps bound delivered messages and these deliver none.
+ *
+ * D13e-a (backlog/decisions/2026-10-17-tty-only-guard-and-moderation-counter.md)
+ * added two guards for the verbs that act on a person. `promote` is TTY-only:
+ * it refuses without a terminal even with --yes, and always asks. And add-members,
+ * kick-member, ban, unban, restrict, promote and demote count against a daily
+ * moderation cap of their own, checked here before any session is opened.
  */
 
 /** Show which chat is about to change, and require a yes. */
@@ -920,19 +926,28 @@ export function registerGroupCommand(program: Command): void {
           )
         }
         const userIds = users.map((raw) => parseUserId(raw))
-        await withAuthenticatedClient(async (tg) => {
+        assertUnderModerationCap(userIds.length)
+        const exit = await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
           const members: string[] = []
           for (const id of userIds) members.push(describePeer(await resolvePeerRef(tg, String(id))))
-          if (!(await confirmAddMembers(target, members, Boolean(options.yes)))) return
+          if (!(await confirmAddMembers(target, members, Boolean(options.yes)))) return 0
           const result = await addChatMembers(tg, target.id, userIds, { yes: options.yes })
+          // A privacy refusal is routine and exits 0; hitting the daily moderation cap is not.
+          const capped = result.failed.find((f) => f.reason === 'cap')
           if (options.json) {
-            process.stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`)
-            return
+            process.stdout.write(`${JSON.stringify({
+              ok: !capped,
+              ...result,
+              ...(capped ? { error: { code: 'notConfigured', exit: EXIT.notConfigured, message: capped.message } } : {})
+            }, null, 2)}\n`)
+            return capped ? EXIT.notConfigured : 0
           }
           logSummary(`added ${result.added.length} of ${userIds.length} to ${target.id}`)
           for (const f of result.failed) console.error(`  not added ${f.user} (${f.reason}): ${f.message}`)
+          return capped ? EXIT.notConfigured : 0
         })
+        if (exit !== 0) process.exit(exit)
       })
     })
 
@@ -946,6 +961,7 @@ export function registerGroupCommand(program: Command): void {
         parsePeerRef(peer)
         assertConfirmed(options)
         const userId = parseUserId(user)
+        assertUnderModerationCap(1)
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
           const member = describePeer(await resolvePeerRef(tg, String(userId)))
@@ -1004,6 +1020,7 @@ export function registerGroupCommand(program: Command): void {
         assertConfirmed(options)
         const userIds = parsePeople(users)
         const until = parseUntil(options.until)
+        assertUnderModerationCap(userIds.length)
         const exit = await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
           const people = await describePeople(tg, userIds)
@@ -1030,6 +1047,7 @@ export function registerGroupCommand(program: Command): void {
         parsePeerRef(peer)
         assertConfirmed(options)
         const userIds = parsePeople(users)
+        assertUnderModerationCap(userIds.length)
         const exit = await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
           const people = await describePeople(tg, userIds)
@@ -1056,6 +1074,7 @@ export function registerGroupCommand(program: Command): void {
         const userId = parsePersonId(user)
         const denied = parseRestrictionNames(options.deny ?? '')
         const until = parseUntil(options.until)
+        assertUnderModerationCap(1)
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
           const person = describePeer(await resolvePeerRef(tg, String(userId)))
@@ -1075,15 +1094,17 @@ export function registerGroupCommand(program: Command): void {
     .description('Make one person an admin with exactly the rights named (numeric user id); there is no "all"')
     .option('--rights <rights>', 'Comma-separated admin rights, e.g. delete-messages,ban-users,pin-messages')
     .option('--rank <text>', 'Custom admin title, 1-16 characters')
-    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--yes', 'Has no effect here: promote is terminal-only and always asks')
     .option('--json', 'Machine-readable output')
     .action(async (peer: string, user: string, options: GroupFlags & { rights?: string; rank?: string }) => {
       await runCommand(async () => {
         parsePeerRef(peer)
-        assertConfirmed(options)
+        // TTY-only (D13e-a): refused without a terminal even with --yes, before a session opens.
+        assertConfirmed(options, { terminalOnly: 'grant admin rights' })
         const userId = parsePersonId(user)
         const rights = parseAdminRightNames(options.rights ?? '')
         const rank = parseRank(options.rank)
+        assertUnderModerationCap(1)
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
           const person = describePeer(await resolvePeerRef(tg, String(userId)))
@@ -1093,7 +1114,8 @@ export function registerGroupCommand(program: Command): void {
             'this REPLACES any rights the person already has',
             ...(rights.includes('add-admins') ? ['WARNING: add-admins lets this person appoint further admins'] : [])
           ]
-          if (!(await confirmPeople(target, 'make this person an ADMIN', [person], Boolean(options.yes), notes))) return
+          // `false`, not options.yes: a terminal-only verb always asks, whatever flags came with it.
+          if (!(await confirmPeople(target, 'make this person an ADMIN', [person], false, notes))) return
           report(
             await promoteAdmin(tg, target.id, userId, rights, { rank, yes: options.yes }),
             `promoted ${userId} in ${target.id}: ${rights.join(', ')}`,
@@ -1113,6 +1135,7 @@ export function registerGroupCommand(program: Command): void {
         parsePeerRef(peer)
         assertConfirmed(options)
         const userId = parsePersonId(user)
+        assertUnderModerationCap(1)
         await withAuthenticatedClient(async (tg) => {
           const target = await resolvePeerRef(tg, peer)
           const person = describePeer(await resolvePeerRef(tg, String(userId)))

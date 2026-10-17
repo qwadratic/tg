@@ -13,7 +13,7 @@ import {
   type RestrictionName,
   type Restrictions
 } from '../groups/rights.js'
-import { assertConfirmed, guardedSend, type SentRecord } from './gate.js'
+import { assertConfirmed, assertUnderModerationCap, guardedSend, ModerationCapError, type SentRecord } from './gate.js'
 import { probeVideo, type VideoMeta } from '../media/probe.js'
 
 /**
@@ -946,9 +946,11 @@ export async function setJoinToSend(
  * Membership and destruction (D13d).
  *
  * Unlike every verb above these act on a PERSON, or destroy a chat outright.
- * Still zero cap units (they deliver no message), still behind the confirmation
+ * Still zero SEND units (they deliver no message), still behind the confirmation
  * gate and the audit log; the real backstops are the 20-user batch cap, the
- * stop-on-flood rule and, for deletion, the ownership check.
+ * stop-on-flood rule, for deletion the ownership check and, since D13e-a, the
+ * daily moderation cap (`TG_MAX_MODERATION_PER_DAY`, one per person, counted
+ * from the audit log apart from the send caps).
  */
 
 /** Telegram errors this CLI has learned by name, as an OperatorError with the right exit code. Anything else passes through. */
@@ -991,7 +993,7 @@ export function friendlyTelegramError(error: unknown): unknown {
 export const MAX_MEMBERS_PER_CALL = 20
 
 export type AddMemberFailureReason =
-  | 'privacy' | 'not_mutual' | 'flood' | 'too_many_channels' | 'already_member' | 'other'
+  | 'privacy' | 'not_mutual' | 'flood' | 'too_many_channels' | 'already_member' | 'cap' | 'other'
 
 export interface AddMemberFailure {
   user: number
@@ -1008,6 +1010,9 @@ const INVITE_HINT = 'Share an invite link instead: tg group invite-new <chat>'
 
 /** Map one thrown error to a stable reason code. `stop` means: do not keep hammering Telegram. */
 function classifyAddFailure(error: unknown): { reason: AddMemberFailureReason; message: string; stop: boolean } {
+  // The daily moderation cap (D13e-a). Checked up front for the whole batch, so
+  // this is only reachable if another process logged people mid-run.
+  if (error instanceof ModerationCapError) return { reason: 'cap', message: error.message, stop: true }
   if (tl.RpcError.is(error, 'FLOOD_WAIT_%d')) {
     return { reason: 'flood', message: `Telegram asked us to wait ${error.seconds}s.`, stop: true }
   }
@@ -1056,14 +1061,22 @@ export async function addChatMembers(
     )
   }
   const users = userIds.map((id) => assertPeerId(id))
+  assertUnderModerationCap(users.length)
 
   const added: number[] = []
   const failed: AddMemberFailure[] = []
-  let stopped = false
+  // Why the batch stopped, if it did: the people not reached are reported with that reason.
+  let stopped: 'flood' | 'cap' | null = null
 
   for (const user of users) {
     if (stopped) {
-      failed.push({ user, reason: 'flood', message: 'Skipped: an earlier attempt in this batch hit a flood limit.' })
+      failed.push({
+        user,
+        reason: stopped,
+        message: stopped === 'cap'
+          ? 'Skipped: an earlier attempt in this batch hit the daily moderation cap.'
+          : 'Skipped: an earlier attempt in this batch hit a flood limit.'
+      })
       continue
     }
     let missing = false
@@ -1081,7 +1094,7 @@ export async function addChatMembers(
     } catch (error) {
       const { reason, message, stop } = classifyAddFailure(error)
       failed.push({ user, reason, message })
-      if (stop) stopped = true
+      if (stop) stopped = reason === 'cap' ? 'cap' : 'flood'
     }
   }
 
@@ -1156,6 +1169,9 @@ export async function deleteChat(
  * lie; the verbs refuse such a chat up front, from the id alone, with no round
  * trip. The one thing deliberately NOT reachable from here is ownership: there
  * is no transfer, and `promote` refuses anything that reads as "all rights".
+ *
+ * `promote` is also the first TTY-only verb (D13e-a): it refuses to run without
+ * a terminal even with `--yes`. `demote` only removes rights, so it is not.
  */
 
 /** Telegram's marked ids: a supergroup or channel is below this, a legacy group is between it and zero. */
@@ -1227,7 +1243,7 @@ const untilDetail = (until: number | undefined): string =>
 
 export type MemberFailureReason =
   | 'flood' | 'not_admin' | 'target_is_admin' | 'target_is_creator' | 'not_member'
-  | 'invalid_user' | 'invalid_chat' | 'too_many_admins' | 'invalid_rank' | 'skipped' | 'other'
+  | 'invalid_user' | 'invalid_chat' | 'too_many_admins' | 'invalid_rank' | 'cap' | 'skipped' | 'other'
 
 export interface MemberFailure {
   user: number
@@ -1259,6 +1275,10 @@ export function memberBatchExit(result: MemberBatchResult): number {
 export function classifyMemberFailure(
   error: unknown
 ): { reason: MemberFailureReason; message: string; exit: number; stop: boolean } {
+  // The daily moderation cap (D13e-a): the same wall for every person after this one.
+  if (error instanceof ModerationCapError) {
+    return { reason: 'cap', message: error.message, exit: error.exitCode, stop: true }
+  }
   if (tl.RpcError.is(error, 'FLOOD_WAIT_%d')) {
     return { reason: 'flood', message: `Telegram asked us to wait ${error.seconds}s. Not retried: retry after that.`, exit: EXIT.upstream, stop: true }
   }
@@ -1317,6 +1337,8 @@ export function classifyMemberFailure(
 
 /** The error a single-person verb throws: mapped when Telegram's answer is known, untouched (a bug) when not. */
 function memberRefusal(error: unknown): unknown {
+  // The daily moderation cap already is the right error, with the repo's cap exit code.
+  if (error instanceof ModerationCapError) return error
   const known = classifyMemberFailure(error)
   return known.reason === 'other' ? error : new OperatorError(known.message, known.exit)
 }
@@ -1384,6 +1406,7 @@ export async function banMembers(
   assertSupergroupId(peerId, 'ban', 'A legacy group has no ban: remove someone there with tg group kick-member.')
   const users = assertPeople(rawUsers, 'ban')
   const until = assertUntil(options.until)
+  assertUnderModerationCap(users.length)
 
   return eachPerson(peerId, 'ban-member', users, untilDetail(until), async (userId) => {
     const message = await tg.banChatMember({
@@ -1412,6 +1435,7 @@ export async function unbanMembers(
   assertConfirmed(options)
   assertSupergroupId(peerId, 'unban', 'A legacy group has no ban to lift.')
   const users = assertPeople(rawUsers, 'unban')
+  assertUnderModerationCap(users.length)
 
   return eachPerson(peerId, 'unban-member', users, 'bans and restrictions lifted', async (userId) => {
     await tg.unbanChatMember({ chatId: peerId, participantId: userId })
@@ -1579,7 +1603,9 @@ export async function promoteAdmin(
   options: AdminOptions & { rank?: string | undefined } = {}
 ): Promise<SentRecord> {
   const peerId = assertPeerId(rawPeer)
-  assertConfirmed(options)
+  // TTY-only (D13e-a): --yes does not stand in for a human here, because this
+  // hands another person power over the chat.
+  assertConfirmed(options, { terminalOnly: 'grant admin rights' })
   assertSupergroupId(peerId, 'promote', 'Admin rights exist only in supergroups and channels.')
   const userId = assertUserId(rawUser)
   const names = parseAdminRightNames(rights)
