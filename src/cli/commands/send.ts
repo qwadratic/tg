@@ -22,6 +22,8 @@ import {
   assertConfirmed,
   MAX_SENDS_PER_DAY,
   MAX_SENDS_PER_RUN,
+  maxModerationPerDay,
+  moderationToday,
   readSendLog,
   sendsToday
 } from '../../send/gate.js'
@@ -456,7 +458,8 @@ export function registerSendCommand(program: Command): void {
         console.log(
           chalk.dim(
             `\n${sendsToday(records)}/${MAX_SENDS_PER_DAY} in the last 24h; ` +
-            `${MAX_SENDS_PER_RUN} allowed per run`
+            `${MAX_SENDS_PER_RUN} allowed per run; ` +
+            `${moderationToday(records)}/${maxModerationPerDay()} people moderated in the last 24h`
           )
         )
       })

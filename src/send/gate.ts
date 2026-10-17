@@ -99,13 +99,76 @@ export interface SentRecord {
 }
 
 /**
+ * The audit kinds that need a human at a terminal, whatever flags were passed
+ * (the TTY-only guard class, D13e-a).
+ *
+ * `guardedSend` checks this list itself, so a verb that is added here is refused
+ * unattended even if its command layer or its send function forgets to ask. The
+ * list is the class: 0.11 adds history deletion and chat auto-delete by adding
+ * their kinds. `demote-admin` is deliberately NOT on it: it only takes rights
+ * away, so it stays behind the ordinary `--yes` gate.
+ */
+export const TTY_ONLY_KINDS: readonly SentRecord['kind'][] = ['promote-admin']
+
+/**
+ * The audit kinds that act on one PERSON in a chat: the moderation budget.
+ *
+ * Each audit line of these kinds is one person, so counting lines is counting
+ * people. They cost no send units (they deliver no message), which is exactly
+ * why they need a budget of their own: nothing else bounds how many people a
+ * loop of `ban` calls can reach in a day (D13e-a).
+ */
+export const MODERATION_KINDS: readonly SentRecord['kind'][] = [
+  'add-member', 'kick-member', 'ban-member', 'unban-member',
+  'restrict-member', 'promote-admin', 'demote-admin'
+]
+
+/**
+ * Refuse unless a human is at a terminal. `--yes` does not help.
+ *
+ * The TTY-only guard class (D13e-a). `assertConfirmed` lets `--yes` stand in for
+ * a human, which is right for most writes and wrong for the few where the
+ * operator's presence is the whole point: `--yes` is one word an agent can add
+ * to its own command line, so for these the answer to "is somebody there" must
+ * not be something the caller can assert. Today that is admin rights
+ * (`promote`); history deletion and chat auto-delete join it when they ship.
+ *
+ * "At a terminal" is exactly {@link canPrompt}: a TTY on stdin and no
+ * `TG_NON_INTERACTIVE=1`. That cannot tell a human from an agent that was handed
+ * a pty, which is why AGENTS.md tells agents to always set `TG_NON_INTERACTIVE=1`
+ * and why these verbs also always ASK, even with `--yes` - somebody has to answer.
+ *
+ * Exit 3, for the reason `assertConfirmed` gives: 4 would read as "fixable
+ * unattended" and invite the workaround.
+ */
+export function assertInteractive(action: string): void {
+  if (canPrompt()) return
+
+  throw new OperatorError(
+    `Refusing to ${action} from a non-interactive run.\n` +
+    '  This is a terminal-only action: --yes does NOT bypass it, because the point is that a\n' +
+    '  human is at the keyboard and answers the prompt. If you are an agent, stop here and ask\n' +
+    '  the operator to run this command themselves in a terminal.',
+    EXIT.needsHuman
+  )
+}
+
+/**
  * Require a human, or an explicit stand-in for one.
  *
  * `--yes` is the caller stating on the record that an unattended run is meant to
  * send. Without it an agent or cron job is refused rather than trusted, because
  * sending is the one thing here that cannot be undone.
+ *
+ * `terminalOnly` names an action that `--yes` may NOT stand in for (see
+ * {@link assertInteractive}); it is checked first, so a refused run says "needs
+ * a terminal" rather than "add --yes", which would be the wrong advice.
  */
-export function assertConfirmed(options: { yes?: boolean | undefined }): void {
+export function assertConfirmed(
+  options: { yes?: boolean | undefined },
+  gate: { terminalOnly?: string } = {}
+): void {
+  if (gate.terminalOnly !== undefined) assertInteractive(gate.terminalOnly)
   if (options.yes) return
   if (canPrompt()) return
 
@@ -146,6 +209,85 @@ export function sendsToday(records: SentRecord[], now = Date.now()): number {
   return records
     .filter((r) => Date.parse(r.at) >= cutoff)
     .reduce((total, r) => total + (r.units ?? 1), 0)
+}
+
+/** The moderation cap when nobody set one: 50 people in 24 hours. See {@link maxModerationPerDay}. */
+export const DEFAULT_MAX_MODERATION_PER_DAY = 50
+
+/**
+ * The daily moderation cap, from `TG_MAX_MODERATION_PER_DAY` (D13e-a).
+ *
+ * The default is 50 people. That is two full 20-person calls and a few single
+ * actions - room for a real clean-up of a spam wave in one sitting - and well
+ * under the volume that looks to Telegram like a ban sweep or a mass-add run,
+ * both of which it throttles and reports. Clearing hundreds in a day is
+ * something the operator should do on purpose, by raising the number.
+ *
+ * Read at call time, not at import, so a test can set it. A value that is not a
+ * non-negative whole number fails CLOSED (the cap becomes 0 and
+ * {@link assertUnderModerationCap} says why): `Number('5O')` is NaN, and a NaN
+ * cap would compare false against everything and quietly switch the guard off.
+ */
+export function maxModerationPerDay(env: NodeJS.ProcessEnv = process.env): number {
+  return readModerationCap(env).value
+}
+
+function readModerationCap(env: NodeJS.ProcessEnv): { value: number; invalid: string | null } {
+  const raw = env.TG_MAX_MODERATION_PER_DAY
+  if (raw === undefined || raw.trim() === '') return { value: DEFAULT_MAX_MODERATION_PER_DAY, invalid: null }
+  if (!/^\d+$/.test(raw.trim())) return { value: 0, invalid: raw }
+  return { value: Number(raw.trim()), invalid: null }
+}
+
+/**
+ * People acted on in the last 24h, successful or not: one per moderation audit line.
+ *
+ * A refused attempt counts, as it does for sends: a retry loop against a person
+ * Telegram will not let us touch is the pattern this exists to bound.
+ */
+export function moderationToday(records: SentRecord[], now = Date.now()): number {
+  const cutoff = now - 24 * 60 * 60 * 1000
+  return records.filter((r) => Date.parse(r.at) >= cutoff && MODERATION_KINDS.includes(r.kind)).length
+}
+
+/**
+ * Raised when the daily moderation cap would be passed.
+ *
+ * Exit 4, the code every other cap in this repo carries (`assertUnderCaps`
+ * throws an `OperatorError` with its default). A named subclass only so a batch
+ * can recognise it and stop instead of reporting an unknown failure.
+ */
+export class ModerationCapError extends OperatorError {
+  constructor(message: string) {
+    super(message, EXIT.notConfigured)
+    this.name = 'ModerationCapError'
+  }
+}
+
+/**
+ * Throw unless `persons` more people fit under today's moderation cap.
+ *
+ * Separate from the send caps on purpose: 20 messages sent today leave the
+ * moderation budget untouched, and 50 bans leave the send budget untouched.
+ */
+export function assertUnderModerationCap(persons = 1, now = Date.now()): void {
+  const { value: cap, invalid } = readModerationCap(process.env)
+  if (invalid !== null) {
+    throw new ModerationCapError(
+      `TG_MAX_MODERATION_PER_DAY=${JSON.stringify(invalid)} is not a whole number, so moderation is refused.\n` +
+      '  Fix or unset it. Nothing was done.'
+    )
+  }
+
+  const today = moderationToday(readSendLog(), now)
+  if (today + persons > cap) {
+    throw new ModerationCapError(
+      `Daily moderation cap reached (${today}/${cap} people in the last 24h; this call needs ${persons} more).\n` +
+      '  Every add, removal, ban, unban, restriction and admin change counts one per person, refused attempts too.\n' +
+      '  Telegram throttles an account that moderates or adds dozens of people a day. A human can raise\n' +
+      '  TG_MAX_MODERATION_PER_DAY if this is intended; if you are an agent, do not: stop and ask the operator.'
+    )
+  }
 }
 
 /**
@@ -205,6 +347,10 @@ export async function guardedSend(
   extra: { units?: number; fromPeerId?: number; topicId?: number; targetUserId?: number; detail?: string } = {}
 ): Promise<SentRecord> {
   const units = extra.units ?? 1
+  // The backstops. Command layers and send functions check these first, so a
+  // refusal is cheap and early; this is the one that cannot be forgotten.
+  if (TTY_ONLY_KINDS.includes(kind)) assertInteractive(`do a ${kind} write`)
+  if (MODERATION_KINDS.includes(kind)) assertUnderModerationCap(1)
   assertUnderCaps(units)
 
   const base = {

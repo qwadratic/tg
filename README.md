@@ -285,7 +285,9 @@ Five guards, each one enforced by a test:
    the send is refused rather than assumed.
 4. **Capped.** 5 per run and 20 per day (`TG_MAX_SENDS_PER_RUN`,
    `TG_MAX_SENDS_PER_DAY`). Failed attempts count too, because a retry loop
-   against a peer that rejects is exactly what draws a report.
+   against a peer that rejects is exactly what draws a report. Acting on people
+   in a chat (`tg group ban`, `add-members` and the rest) has a daily cap of its
+   own, below.
 5. **Logged.** Every attempt appends to `data/sent.jsonl`, mode `0600`, recording
    the peer, kind, size and outcome — never the message content.
 
@@ -336,7 +338,7 @@ confirmation prompt (or `--yes`), and a line in `data/sent.jsonl`.
 | `group ban <peer> <ids...> [--until <date>]` | ban people, numeric ids only, at most 20 per call; forever unless `--until` |
 | `group unban <peer> <ids...>` | let them join again and lift any restrictions; does not add them back |
 | `group restrict <peer> <id> --deny <a,b> [--until <date>]` | take abilities away from one member, e.g. `send-messages,send-media` |
-| `group promote <peer> <id> --rights <a,b> [--rank <title>]` | make one person an admin with exactly the rights named |
+| `group promote <peer> <id> --rights <a,b> [--rank <title>]` | make one person an admin with exactly the rights named; terminal only, `--yes` does not bypass it |
 | `group demote <peer> <id>` | take every admin right away; they stay a member |
 
 Two of these do not come back:
@@ -352,8 +354,9 @@ the server's app config.
 
 `add-members` adds people one at a time and reports each outcome. With `--json`
 it prints `{"ok": true, "added": [ids], "failed": [{"user", "reason", "message"}]}`
-and exits 0 even when some users could not be added. `reason` is one of
-`privacy`, `not_mutual`, `flood`, `too_many_channels`, `already_member`, `other`.
+and exits 0 even when some users could not be added, except for `cap` (the daily
+moderation cap, below), which exits 4. `reason` is one of `privacy`, `not_mutual`,
+`flood`, `too_many_channels`, `already_member`, `cap`, `other`.
 A privacy block is not an error to retry: use `group invite-new` and share the
 link. A flood limit stops the batch; the users not yet tried come back as
 `flood`. `delete` refuses unless this account created the chat.
@@ -361,7 +364,8 @@ link. A flood limit stops the batch; the users not yet tried come back as
 ### Moderation and admin rights
 
 `ban`, `unban`, `restrict`, `promote` and `demote` act on a *person*, so they
-are stricter than the rest:
+are stricter than the rest (the daily cap below also covers `add-members` and
+`kick-member`):
 
 - **People are positive numeric ids**, never `@handles` and never a chat id
   (`tg peers find <name> --id-only`). The prompt shows each person's name,
@@ -391,6 +395,25 @@ are stricter than the rest:
   `--rank` is a custom title of 1-16 characters. Promoting replaces the rights
   the person had; `add-admins` lets them appoint more admins, and the prompt
   says so.
+- **`promote` is terminal-only.** It runs only from an interactive terminal:
+  `--yes` does **not** bypass that, an unattended or agent run exits 3 with a
+  message saying so, and at a terminal it always asks, whatever flags came with
+  it. Handing someone power over a chat is the one write where the operator being
+  present is the point, and `--yes` is a word an agent can add to its own command
+  line. Setting `TG_NON_INTERACTIVE=1` closes it even on a pty, as agents are told
+  to do. `demote` only takes rights away, so it stays behind the ordinary
+  `--yes` gate.
+- **A daily moderation cap of its own.** `add-members`, `kick-member`, `ban`,
+  `unban`, `restrict`, `promote` and `demote` count one per person against 50 a
+  day (`TG_MAX_MODERATION_PER_DAY`), counted from the audit log, failed attempts
+  included, and apart from the send caps: 50 bans do not spend a message and 20
+  messages do not spend a ban. A call that does not fit in what is left is refused
+  whole, before a session opens, with exit 4 like the send caps. 50 is two full
+  calls and a few more, enough to clear a spam wave; hundreds a day is what a ban
+  sweep or a mass-add looks like to Telegram, so raising the number is something
+  the operator does on purpose. A value that is not a whole number refuses
+  moderation rather than turning the cap off. `tg send log` shows where you
+  stand.
 
 `ban` and `unban` with `--json` print `{"ok", "banned" | "unbanned": [ids],
 "failed": [{"user", "reason", "message", "exit"}]}`. Unlike `add-members` they
@@ -398,7 +421,7 @@ exit 0 only when every person was done; otherwise they exit with the code of the
 first refusal, after printing that result (with an `error` object alongside).
 Reasons: `flood`, `not_admin`, `target_is_admin`, `target_is_creator`,
 `not_member`, `invalid_user`, `invalid_chat`, `too_many_admins`, `invalid_rank`,
-`skipped`, `other`.
+`cap`, `skipped`, `other`.
 
 Not here, and not to be added without their own decision record: deleting a
 legacy group, chat migration, message auto-delete (`setChatTtl`) and handing over
@@ -406,7 +429,9 @@ ownership. See
 `backlog/decisions/2026-08-31-widen-the-fenced-write-verbs-to-group-channel-management.md`,
 `backlog/decisions/2026-10-05-widen-the-fenced-write-verbs-to-membership-and-deletion.md`
 and
-`backlog/decisions/2026-10-17-widen-the-fenced-write-verbs-to-moderation-and-admin-rights.md`.
+`backlog/decisions/2026-10-17-widen-the-fenced-write-verbs-to-moderation-and-admin-rights.md`;
+the terminal-only rule and the moderation cap are in
+`backlog/decisions/2026-10-17-tty-only-guard-and-moderation-counter.md`.
 
 Telegram refusals map to readable messages and exit codes: `CHAT_ADMIN_REQUIRED`,
 `RIGHT_FORBIDDEN`, `USER_ADMIN_INVALID` and `ADMINS_TOO_MUCH` are 3 (a human must

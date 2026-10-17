@@ -21,7 +21,7 @@ Exit codes are the contract. Act on them, do not parse prose:
 | 0 | ok | proceed |
 | 1 | a bug in this tool | report it, with the stack |
 | 2 | usage error | fix the command |
-| 3 | needs a human | STOP. Either the workspace needs `tg session login`, or an unattended send was refused. Ask the operator; retrying is pointless and `--yes` is theirs to give, not yours to add |
+| 3 | needs a human | STOP. Either the workspace needs `tg session login`, an unattended send was refused, or a terminal-only action (`group promote`) was refused. Ask the operator; retrying is pointless and `--yes` is theirs to give, not yours to add (and for a terminal-only action no `--yes` helps) |
 | 4 | `not_configured` | the report's `hint` is the fix; it usually needs no human |
 | 5 | busy | another run holds the lock. Wait and retry |
 | 6 | upstream | Telegram, gbrain or the network failed. Not your fault; retry with backoff |
@@ -100,6 +100,19 @@ person, so it has rules that are enforced by `test/trust.test.ts`, not by taste:
 - **Do not raise `TG_MAX_SENDS_PER_RUN` or `TG_MAX_SENDS_PER_DAY`** to get a
   batch through. The caps exist because a burst of outbound messages from a user
   account is what earns a report and a ban.
+- **Do not raise `TG_MAX_MODERATION_PER_DAY`** (default 50 people) either, and do
+  not split a refused call into smaller ones. `add-members`, `kick-member`, `ban`,
+  `unban`, `restrict`, `promote` and `demote` cost no send units, so nothing but
+  this cap bounds how many people a loop of them reaches in a day. It counts one
+  per person from `data/sent.jsonl`, failed attempts included, separately from the
+  send caps, and refuses over-cap calls whole with exit 4 (D13e-a).
+- **A terminal-only action cannot be run by an agent.** `tg group promote` (and,
+  when they ship, history deletion and chat auto-delete) exits 3 without an
+  interactive terminal, even with `--yes`, and at a terminal always asks. Do not
+  allocate a pty or drop `TG_NON_INTERACTIVE=1` to get past it: that is the
+  workaround the rule exists to stop. Stop and ask the operator to run it. The
+  class is `TTY_ONLY_KINDS` in `src/send/gate.ts`, enforced by `guardedSend`
+  itself (D13e-a).
 - **Do not resolve a peer inside `src/send/`.** Resolution happens in the command
   layer so that exactly one place turns a reference into an identity, and that
   identity is what gets confirmed and logged. eval-33 and eval-65 pin this.
@@ -109,7 +122,9 @@ person, so it has rules that are enforced by `test/trust.test.ts`, not by taste:
   read them there rather than trusting a copy here, which goes stale every time
   the fence widens. Adding a write verb means adding its RPC name to the list
   AND justifying any allowlist entry in a decision file (D13, D13a, D13b, D13c,
-  D13d, D13e).
+  D13d, D13e, D13e-a). A verb that acts on a person also joins
+  `MODERATION_KINDS` in `src/send/gate.ts`, and one that grants power or destroys
+  history joins `TTY_ONLY_KINDS`; a kind on neither list is on neither guard.
 - **Do not import `src/send/` from an unattended path.** eval-30 and eval-31 walk
   the import graphs of `export`, `folders`, `ship`, `sync` and every read verb,
   and fail if any of them can reach it. That is what makes "a cron job cannot
@@ -157,7 +172,7 @@ That is intended. Do not start an export beside it.
 | `src/groups/rights.ts` | the admin-right and restriction vocabularies, pure data shared by the read and write halves |
 | `src/media/index.ts` | media download |
 | `src/watch/index.ts` | polling for media not yet sent |
-| `src/send/gate.ts` | send caps, confirmation rule, audit log. No RPCs |
+| `src/send/gate.ts` | send caps, the daily moderation cap, confirmation rule, the TTY-only class (`TTY_ONLY_KINDS`), audit log. No RPCs |
 | `src/send/index.ts` | **the only module that calls a Telegram write RPC** |
 | `src/messages/fetch.ts` | the single rate-limited history iterator. Do not add a second |
 | `src/folders/status.ts` | pure derivation of folder recency from sync state |

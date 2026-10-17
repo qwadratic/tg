@@ -5,17 +5,29 @@ import assert from 'node:assert'
 import test from 'node:test'
 import { assertPeerId } from '../src/peers/id.js'
 import {
+  DEFAULT_MAX_MODERATION_PER_DAY,
   MAX_SENDS_PER_DAY,
+  MODERATION_KINDS,
+  ModerationCapError,
+  TTY_ONLY_KINDS,
   assertConfirmed,
+  assertInteractive,
+  assertUnderCaps,
+  assertUnderModerationCap,
+  guardedSend,
+  maxModerationPerDay,
+  moderationToday,
   readSendLog,
   recordSend,
   resetRunCounter,
   sendsToday,
   type SentRecord
 } from '../src/send/gate.js'
+import { OperatorError } from '../src/errors.js'
+import { EXIT } from '../src/exit-codes.js'
 import { mediaFilename } from '../src/media/index.js'
 import { mediaKindFor } from '../src/send/index.js'
-import { withTempDir } from './helpers.js'
+import { seedModerationLog, withTempDir, withTerminal, withTerminalState, withoutTerminal } from './helpers.js'
 
 const SRC = fileURLToPath(new URL('../src/', import.meta.url))
 
@@ -566,4 +578,166 @@ test('eval-163 the D13e write RPCs are called in src/send/index.ts and nowhere e
     const calling = sourceFiles().filter((file) => new RegExp(`\\.\\s*${rpc}\\s*\\(`).test(readFileSync(file, 'utf-8')))
     assert.deepEqual(calling, [], `${rpc} is out of scope and must not be called`)
   }
+})
+
+/**
+ * D13e-a: the TTY-only guard class and the daily moderation counter.
+ *
+ * Both live in `src/send/gate.ts` and both are enforced twice: by the command
+ * layer before a session exists, and by `guardedSend` itself, so a verb that
+ * forgets to ask is still refused.
+ */
+
+const needsHuman = (e: unknown) => e instanceof OperatorError && e.exitCode === EXIT.needsHuman
+
+test('eval-165 a TTY-only action is refused without a terminal, and --yes does not change that', async () => {
+  const action = 'grant admin rights'
+
+  // Nobody there: an agent's run, TG_NON_INTERACTIVE=1 as AGENTS.md tells it to set.
+  await withoutTerminal(() => {
+    assert.throws(() => assertInteractive(action), needsHuman)
+    // The whole point: the flag an agent can add does NOT stand in for a human.
+    assert.throws(() => assertConfirmed({ yes: true }, { terminalOnly: action }), (e: unknown) =>
+      needsHuman(e) && /--yes does NOT bypass/.test((e as Error).message) && /terminal-only/.test((e as Error).message))
+    assert.throws(() => assertConfirmed({}, { terminalOnly: action }), (e: unknown) =>
+      needsHuman(e) && /terminal-only/.test((e as Error).message), 'and the advice is not "add --yes"')
+    // The ordinary gate is untouched: --yes still stands in for a human when no class is named.
+    assert.doesNotThrow(() => assertConfirmed({ yes: true }))
+  })
+
+  // A pty without TG_NON_INTERACTIVE is a terminal as far as the tool can tell...
+  await withTerminal(() => {
+    assert.doesNotThrow(() => assertInteractive(action))
+    assert.doesNotThrow(() => assertConfirmed({}, { terminalOnly: action }))
+    assert.doesNotThrow(() => assertConfirmed({ yes: true }, { terminalOnly: action }))
+  })
+  // ...which is why setting TG_NON_INTERACTIVE=1 closes it even on a real TTY.
+  await withTerminalState({ tty: true, nonInteractive: true }, () => {
+    assert.throws(() => assertInteractive(action), needsHuman)
+    assert.throws(() => assertConfirmed({ yes: true }, { terminalOnly: action }), needsHuman)
+  })
+  // And no TTY at all is refused even when nothing set TG_NON_INTERACTIVE.
+  await withTerminalState({ tty: false }, () => {
+    assert.throws(() => assertConfirmed({ yes: true }, { terminalOnly: action }), needsHuman)
+  })
+
+  // The class is opt-in and exactly this long: admin rights, nothing that only removes them.
+  assert.deepEqual([...TTY_ONLY_KINDS], ['promote-admin'])
+  assert.ok(!(TTY_ONLY_KINDS as readonly string[]).includes('demote-admin'), 'demote only removes rights')
+})
+
+test('eval-166 guardedSend refuses a TTY-only kind without a terminal even if the caller forgot to ask', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    let rpcCalls = 0
+    const rpc = () => { rpcCalls++; return Promise.resolve({ id: 0 }) }
+
+    await withoutTerminal(async () => {
+      // No assertConfirmed anywhere in this call: the backstop is the only guard.
+      await assert.rejects(() => guardedSend(-1001234567890, 'promote-admin', 0, rpc, { units: 0, targetUserId: 42 }), needsHuman)
+      // Another kind is not in the class and goes through, as before.
+      await guardedSend(-1001234567890, 'demote-admin', 0, rpc, { units: 0, targetUserId: 42 })
+    })
+    assert.equal(rpcCalls, 1, 'the refused write never reached Telegram')
+    assert.deepEqual(readSendLog().map((r) => r.kind), ['demote-admin'], 'and left no audit line, as no RPC was tried')
+
+    await withTerminal(() => guardedSend(-1001234567890, 'promote-admin', 0, rpc, { units: 0, targetUserId: 42 }))
+    assert.equal(rpcCalls, 2)
+  })
+})
+
+test('eval-167 the moderation cap counts people, apart from the send caps, and a failed attempt counts too', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const now = Date.parse('2026-10-17T12:00:00.000Z')
+    const at = (hoursAgo: number) => new Date(now - hoursAgo * 3600_000).toISOString()
+    const line = (kind: SentRecord['kind'], hoursAgo: number, ok = true): SentRecord => ({
+      at: at(hoursAgo), peerId: -1001234567890, kind, targetUserId: 7, messageId: ok ? 0 : null, size: 0, units: 0, ok,
+      ...(ok ? {} : { error: 'USER_ADMIN_INVALID' })
+    })
+
+    const records: SentRecord[] = [
+      line('add-member', 1), line('kick-member', 2), line('ban-member', 3), line('unban-member', 4),
+      line('restrict-member', 5), line('promote-admin', 6), line('demote-admin', 7),
+      // A refused attempt still consumed a person's worth of budget.
+      line('ban-member', 8, false),
+      // Outside the 24h window.
+      line('ban-member', 24.1), line('ban-member', 100),
+      // Not moderation: chat settings and sends are other budgets.
+      line('chat-title', 1), line('slow-mode', 1),
+      { at: at(1), peerId: 5, kind: 'text', messageId: 1, size: 3, ok: true }
+    ]
+    assert.equal(moderationToday(records, now), 8)
+    assert.equal(sendsToday(records, now), 1, 'moderation lines cost no send units, so they never fill the send budget')
+    assert.deepEqual(
+      [...MODERATION_KINDS].sort(),
+      ['add-member', 'ban-member', 'demote-admin', 'kick-member', 'promote-admin', 'restrict-member', 'unban-member']
+    )
+
+    assert.equal(DEFAULT_MAX_MODERATION_PER_DAY, 50)
+    assert.equal(maxModerationPerDay({}), 50, 'the default')
+    assert.equal(maxModerationPerDay({ TG_MAX_MODERATION_PER_DAY: ' 12 ' }), 12)
+    assert.equal(maxModerationPerDay({ TG_MAX_MODERATION_PER_DAY: '0' }), 0, 'zero is a deliberate off switch')
+    assert.equal(maxModerationPerDay({ TG_MAX_MODERATION_PER_DAY: '' }), 50, 'an empty value is unset')
+    // A value that is not a whole number fails CLOSED: Number("5O") is NaN, and a NaN cap compares false to everything.
+    for (const bad of ['5O', '-3', '1.5', 'many', '1e3', '0x10']) {
+      assert.equal(maxModerationPerDay({ TG_MAX_MODERATION_PER_DAY: bad }), 0, bad)
+    }
+  })
+})
+
+test('eval-168 over the moderation cap is refused, with the repo exit code for a cap, apart from the send cap', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const original = process.env.TG_MAX_MODERATION_PER_DAY
+    delete process.env.TG_MAX_MODERATION_PER_DAY
+    try {
+      seedModerationLog(45)
+      // Moderation never fills the send budget: 45 bans leave every send slot free.
+      assert.doesNotThrow(() => assertUnderCaps(1))
+      assert.doesNotThrow(() => assertUnderModerationCap(5), '45 + 5 is exactly the cap')
+      // Whole-call arithmetic: six more people do not fit in a budget of five.
+      assert.throws(() => assertUnderModerationCap(6), (e: unknown) =>
+        e instanceof ModerationCapError && /45\/50/.test(e.message) && /needs 6 more/.test(e.message))
+
+      // The repo's exit code for a cap is the one the send caps already carry.
+      for (let i = 0; i < MAX_SENDS_PER_DAY; i++) {
+        recordSend({ at: new Date().toISOString(), peerId: 1, kind: 'text', messageId: i, size: 1, ok: true })
+      }
+      let sendCap: unknown = null
+      try { assertUnderCaps(1) } catch (e) { sendCap = e }
+      assert.ok(sendCap instanceof OperatorError, 'the send cap is hit too')
+      let modCap: unknown = null
+      try { assertUnderModerationCap(6) } catch (e) { modCap = e }
+      assert.ok(modCap instanceof OperatorError)
+      assert.equal(modCap.exitCode, sendCap.exitCode, 'same code as the send caps')
+      assert.equal(modCap.exitCode, EXIT.notConfigured)
+
+      // And the other direction: a spent send day leaves the five moderation slots.
+      assert.doesNotThrow(() => assertUnderModerationCap(5))
+      seedModerationLog(5)
+      assert.throws(() => assertUnderModerationCap(1), ModerationCapError)
+
+      // The backstop inside guardedSend refuses the write itself, with no RPC and no audit line.
+      let rpcCalls = 0
+      const before = readSendLog().length
+      await assert.rejects(
+        () => guardedSend(-1001234567890, 'ban-member', 0, () => { rpcCalls++; return Promise.resolve({ id: 0 }) }, { units: 0, targetUserId: 9 }),
+        ModerationCapError
+      )
+      assert.equal(rpcCalls, 0)
+      assert.equal(readSendLog().length, before, 'a refusal before the RPC is not an attempt')
+
+      // An invalid setting refuses moderation outright instead of switching the guard off.
+      process.env.TG_MAX_MODERATION_PER_DAY = '5O'
+      assert.throws(() => assertUnderModerationCap(1), (e: unknown) =>
+        e instanceof ModerationCapError && /not a whole number/.test(e.message))
+      // A raised cap is the operator's to set, and it is read at call time.
+      process.env.TG_MAX_MODERATION_PER_DAY = '500'
+      assert.doesNotThrow(() => assertUnderModerationCap(20))
+    } finally {
+      if (original === undefined) delete process.env.TG_MAX_MODERATION_PER_DAY
+      else process.env.TG_MAX_MODERATION_PER_DAY = original
+    }
+  })
 })

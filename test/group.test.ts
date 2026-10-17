@@ -43,7 +43,7 @@ import {
 } from '../src/send/index.js'
 import { EXIT } from '../src/exit-codes.js'
 import { OperatorError } from '../src/errors.js'
-import { readSendLog, resetRunCounter, sendsToday } from '../src/send/gate.js'
+import { ModerationCapError, readSendLog, resetRunCounter, sendsToday } from '../src/send/gate.js'
 import {
   listChatMembers,
   listForumTopics,
@@ -55,7 +55,7 @@ import {
 } from '../src/groups/index.js'
 import { ADMIN_RIGHTS, RESTRICTIONS } from '../src/groups/rights.js'
 import { messageStats, renderDump } from '../src/dump/index.js'
-import { withTempDir } from './helpers.js'
+import { seedModerationLog, withTempDir, withTerminal, withoutTerminal } from './helpers.js'
 
 /**
  * `tg group` - chat administration behind the same fence as sending (D13c).
@@ -787,7 +787,7 @@ test('eval-154 the restriction and admin-right vocabularies cover Telegram\'s fl
 })
 
 test('eval-155 promote grants exactly the rights named, and demote is empty rights', async () => {
-  await withTempDir(async () => {
+  await withTerminal(() => withTempDir(async () => {
     resetRunCounter()
     const { tg, calls } = memberClient()
 
@@ -812,11 +812,11 @@ test('eval-155 promote grants exactly the rights named, and demote is empty righ
     const log = readSendLog()
     assert.deepEqual(log.map((r) => r.kind), ['promote-admin', 'promote-admin', 'demote-admin'])
     assert.equal(sendsToday(log), 0, 'admin rights cost no send budget')
-  })
+  }))
 })
 
 test('eval-156 promote refuses "all rights", ownership and anything it cannot name, before the network', async () => {
-  await withTempDir(async () => {
+  await withTerminal(() => withTempDir(async () => {
     resetRunCounter()
     const { tg, calls } = memberClient()
     const usage = (e: unknown) => e instanceof OperatorError && e.exitCode === EXIT.usage
@@ -843,11 +843,11 @@ test('eval-156 promote refuses "all rights", ownership and anything it cannot na
 
     assert.equal(calls.length, 1, 'only the final, valid call reached Telegram')
     assert.equal(readSendLog().length, 1)
-  })
+  }))
 })
 
 test('eval-157 single-person verbs map Telegram refusals to exit codes and keep unknown ones as bugs', async () => {
-  await withTempDir(async () => {
+  await withTerminal(() => withTempDir(async () => {
     resetRunCounter()
     const failing = (text: string, code = 400) => memberClient({
       restrict: () => { throw rpc(text, code) },
@@ -880,11 +880,11 @@ test('eval-157 single-person verbs map Telegram refusals to exit codes and keep 
     const log = readSendLog()
     assert.equal(log.length, 7 * 3 + 1, 'a refused attempt is still on the record')
     assert.ok(log.every((r) => !r.ok && typeof r.error === 'string'))
-  })
+  }))
 })
 
 test('eval-158 moderation verbs take people as positive numeric ids, and only supergroups or channels', async () => {
-  await withTempDir(async () => {
+  await withTerminal(() => withTempDir(async () => {
     resetRunCounter()
     const { tg, calls } = memberClient()
     const usage = (e: unknown) => e instanceof OperatorError && e.exitCode === EXIT.usage
@@ -933,7 +933,7 @@ test('eval-158 moderation verbs take people as positive numeric ids, and only su
 
     assert.equal(calls.length, 20, 'only the final, valid batch reached Telegram')
     assert.equal(readSendLog().length, 20)
-  })
+  }))
 })
 
 test('eval-159 without --yes and without a terminal, every moderation verb refuses with exit 3', async () => {
@@ -1051,7 +1051,8 @@ test('eval-162 the moderation verbs work through the real CLI: usage and gate re
       [['group', 'ban', chat, '42'], EXIT.needsHuman, /without --yes/],
       [['group', 'unban', chat, '42'], EXIT.needsHuman, /without --yes/],
       [['group', 'restrict', chat, '42', '--deny', 'send-media'], EXIT.needsHuman, /without --yes/],
-      [['group', 'promote', chat, '42', '--rights', 'other'], EXIT.needsHuman, /without --yes/],
+      // promote is terminal-only (D13e-a): its refusal is a different one, pinned in eval-171.
+      [['group', 'promote', chat, '42', '--rights', 'other'], EXIT.needsHuman, /terminal-only/],
       [['group', 'demote', chat, '42'], EXIT.needsHuman, /without --yes/],
       // Usage errors, offline.
       [['group', 'ban', chat, '@durov', '--yes'], EXIT.usage, /numeric peer ids/],
@@ -1059,9 +1060,8 @@ test('eval-162 the moderation verbs work through the real CLI: usage and gate re
       [['group', 'ban', chat, '42', '--until', '5', '--yes'], EXIT.usage, /FOREVER/],
       [['group', 'restrict', chat, '42', '--yes'], EXIT.usage, /at least one restriction/],
       [['group', 'restrict', chat, '42', '--deny', 'view-messages', '--yes'], EXIT.usage, /tg group ban/],
-      [['group', 'promote', chat, '42', '--rights', 'all', '--yes'], EXIT.usage, /no "all"/],
-      [['group', 'promote', chat, '42', '--yes'], EXIT.usage, /at least one right/],
-      [['group', 'promote', chat, '42', '--rights', 'other', '--rank', 'x'.repeat(17), '--yes'], EXIT.usage, /admin title/]
+      // promote's own usage refusals (all, no rights, a long rank) need a terminal to be
+      // reached at all now; eval-156 covers them at the library layer.
     ]
 
     const results = await Promise.all(cases.map(([args]) => run([...args, '--json'])))
@@ -1074,4 +1074,271 @@ test('eval-162 the moderation verbs work through the real CLI: usage and gate re
       assert.match(envelope.error.message + JSON.stringify(envelope), message)
     })
   })
+})
+
+/**
+ * D13e-a: `promote` is TTY-only, and the person-directed verbs share a daily
+ * moderation cap. Mocked client throughout; the real CLI is driven only for
+ * refusals that happen before a session is looked for.
+ */
+
+const terminalOnly = (e: unknown) =>
+  e instanceof OperatorError && e.exitCode === EXIT.needsHuman && /terminal-only/.test(e.message)
+
+test('eval-169 promote needs a terminal even with --yes, before any network; demote and the other verbs do not', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const { tg, calls } = memberClient()
+
+    await withoutTerminal(async () => {
+      await assert.rejects(() => promoteAdmin(tg, CHAT, 42, 'other', YES), terminalOnly)
+      await assert.rejects(() => promoteAdmin(tg, CHAT, 42, 'other', {}), terminalOnly)
+      // The terminal rule is checked before the arguments, so an agent that cannot run this verb
+      // is told so, rather than being walked through its usage errors one by one.
+      await assert.rejects(() => promoteAdmin(tg, CHAT, 42, 'all', YES), terminalOnly)
+      await assert.rejects(() => promoteAdmin(tg, CHAT, 42, '', { ...YES, rank: 'x'.repeat(40) }), terminalOnly)
+      assert.deepEqual(calls, [], 'nothing reached Telegram')
+      assert.deepEqual(readSendLog(), [], 'and nothing was logged: there was no attempt')
+
+      // Taking rights away, and the rest, stay behind the ordinary --yes gate.
+      await demoteAdmin(tg, CHAT, 42, YES)
+      await restrictMember(tg, CHAT, 42, 'send-media', YES)
+      await banMembers(tg, CHAT, [43], YES)
+      await unbanMembers(tg, CHAT, [43], YES)
+      assert.deepEqual(calls.map(([name]) => name), ['rights', 'restrict', 'ban', 'unban'])
+    })
+
+    await withTerminal(async () => {
+      const promoted = await promoteAdmin(tg, CHAT, 42, 'delete-messages', YES)
+      assert.equal(promoted.kind, 'promote-admin')
+      assert.deepEqual(calls[4], ['rights', { chatId: CHAT, userId: 42, rights: { deleteMessages: true } }])
+    })
+  })
+})
+
+/** A client with every person-directed method, recording the order they were reached in. */
+function personClient(behaviour: Record<string, (params: unknown) => unknown> = {}): { tg: TelegramClient; calls: string[] } {
+  const calls: string[] = []
+  const make = (name: string, fallback: unknown) => (...args: unknown[]) => {
+    calls.push(name)
+    return Promise.resolve().then(() => (behaviour[name] ? behaviour[name](args[0]) : fallback))
+  }
+  const tg = {
+    banChatMember: make('ban', { id: 31 }),
+    unbanChatMember: make('unban', undefined),
+    restrictChatMember: make('restrict', undefined),
+    editAdminRights: make('rights', undefined),
+    addChatMembers: make('add', []),
+    kickChatMember: make('kick', { id: 5 }),
+    resolvePeer: () => Promise.resolve({}),
+    sendText: make('text', { id: 9 })
+  } as unknown as TelegramClient
+  return { tg, calls }
+}
+
+test('eval-170 every person-directed verb counts against the moderation cap and is refused whole, before Telegram', async () => {
+  await withTempDir(() => withTerminal(async () => {
+    resetRunCounter()
+    const { tg, calls } = personClient()
+    const capped = (e: unknown) =>
+      e instanceof ModerationCapError && e.exitCode === EXIT.notConfigured && /Daily moderation cap/.test(e.message)
+
+    seedModerationLog(45)
+    // Six people do not fit in the five slots that are left: the call is refused as a whole, not half done.
+    await assert.rejects(() => banMembers(tg, CHAT, [1, 2, 3, 4, 5, 6], YES), capped)
+    await assert.rejects(() => unbanMembers(tg, CHAT, [1, 2, 3, 4, 5, 6], YES), capped)
+    await assert.rejects(() => addChatMembers(tg, CHAT, [1, 2, 3, 4, 5, 6], YES), capped)
+    assert.deepEqual(calls, [], 'a refused call never reaches Telegram')
+
+    // Five do fit, and take the last of the day's budget. One audit line per person, as ever.
+    const result = await banMembers(tg, CHAT, [1, 2, 3, 4, 5], YES)
+    assert.deepEqual(result.done, [1, 2, 3, 4, 5])
+    assert.equal(readSendLog().length, 50)
+
+    // Now every verb is refused, for one person, whatever it does to them.
+    const refused: [string, () => Promise<unknown>][] = [
+      ['ban', () => banMembers(tg, CHAT, [9], YES)],
+      ['unban', () => unbanMembers(tg, CHAT, [9], YES)],
+      ['add-members', () => addChatMembers(tg, CHAT, [9], YES)],
+      ['kick-member', () => kickChatMember(tg, CHAT, 9, YES)],
+      ['restrict', () => restrictMember(tg, CHAT, 9, 'send-media', YES)],
+      ['promote', () => promoteAdmin(tg, CHAT, 9, 'other', YES)],
+      ['demote', () => demoteAdmin(tg, CHAT, 9, YES)]
+    ]
+    for (const [verb, run] of refused) {
+      await assert.rejects(run, capped, verb)
+    }
+    assert.deepEqual(calls, ['ban', 'ban', 'ban', 'ban', 'ban'], 'only the five that fit ever reached Telegram')
+    assert.equal(readSendLog().length, 50, 'a refusal is not an attempt and adds no line')
+
+    // The cap is moderation's own: a full moderation day does not stop a message.
+    await sendText(tg, CHAT, 'still allowed', YES)
+    assert.equal(sendsToday(readSendLog()), 1)
+
+    // The per-call limit of 20 is unchanged, and checked first (it is a usage error, not a cap).
+    const many = Array.from({ length: 21 }, (_, i) => i + 1)
+    await assert.rejects(() => banMembers(tg, CHAT, many, YES), (e: unknown) =>
+      e instanceof OperatorError && e.exitCode === EXIT.usage && /at most 20/.test(e.message))
+  }))
+})
+
+test('eval-171 a cap reached mid-call stops the batch: the rest are cap and skipped, exit 4, nothing retried', async () => {
+  // Another process logs 20 people while this call is running: the up-front check cannot see that,
+  // so the per-person backstop in guardedSend has to hold the line.
+  await withTempDir(async () => {
+    resetRunCounter()
+    const { tg, calls } = personClient({ ban: () => { seedModerationLog(20); return { id: 1 } } })
+    seedModerationLog(40)
+
+    const banned = await banMembers(tg, CHAT, [1, 2, 3], YES)
+    assert.deepEqual(banned.done, [1])
+    assert.deepEqual(banned.failed.map((f) => [f.user, f.reason, f.exit]), [
+      [2, 'cap', EXIT.notConfigured],
+      [3, 'skipped', EXIT.notConfigured]
+    ])
+    assert.equal(memberBatchExit(banned), EXIT.notConfigured)
+    assert.deepEqual(calls, ['ban'], 'nothing was attempted after the cap, and nothing retried')
+  })
+
+  // add-members reports the same wall in its own vocabulary, and still never goes on.
+  await withTempDir(async () => {
+    resetRunCounter()
+    const { tg, calls } = personClient({ add: () => { seedModerationLog(20); return [] } })
+    seedModerationLog(40)
+
+    const added = await addChatMembers(tg, CHAT, [1, 2, 3], YES)
+    assert.deepEqual(added.added, [1])
+    assert.deepEqual(added.failed.map((f) => [f.user, f.reason]), [[2, 'cap'], [3, 'cap']])
+    assert.deepEqual(calls, ['add'])
+  })
+})
+
+test('eval-172 promote through the real CLI: refused without a terminal in every shape, before a session, with --yes too', async () => {
+  const entry = fileURLToPath(new URL('../src/index.ts', import.meta.url))
+  const tsx = fileURLToPath(new URL('../node_modules/tsx/dist/esm/index.mjs', import.meta.url))
+
+  await withTempDir(async () => {
+    // The child's stdin is a pipe, never a terminal, whether or not TG_NON_INTERACTIVE is set.
+    const run = (args: string[], env: Record<string, string>) => new Promise<{ code: number | null; stdout: string }>((done) => {
+      const clean = { ...process.env }
+      delete clean.TG_NON_INTERACTIVE
+      delete clean.TGU_NON_INTERACTIVE
+      execFile(
+        process.execPath,
+        ['--import', tsx, entry, ...args, '--json'],
+        { env: { ...clean, TG_NO_UPDATE: '1', ...env }, cwd: process.cwd() },
+        (error, stdout) => done({ code: error ? (error as { code?: number }).code ?? 1 : 0, stdout })
+      )
+    })
+
+    const chat = String(CHAT)
+    const shapes: string[][] = [
+      ['group', 'promote', chat, '42', '--rights', 'other'],
+      ['group', 'promote', chat, '42', '--rights', 'other', '--yes'],
+      // Checked before the arguments: a verb that cannot run says so, whatever else is wrong with the line.
+      ['group', 'promote', chat, '42', '--rights', 'all', '--yes'],
+      ['group', 'promote', chat, '42', '--yes']
+    ]
+    const runs = shapes.flatMap((args) => [
+      { args, env: { TG_NON_INTERACTIVE: '1' } },
+      { args, env: {} }
+    ])
+    const results = await Promise.all(runs.map(({ args, env }) => run(args, env)))
+
+    results.forEach((result, i) => {
+      const { args, env } = runs[i]!
+      const label = `tg ${args.join(' ')} ${JSON.stringify(env)}`
+      assert.equal(result.code, EXIT.needsHuman, `${label} exited ${result.code}`)
+      const envelope = JSON.parse(result.stdout) as { ok: boolean; error: { code: string; exit: number; message: string; detail: string } }
+      assert.equal(envelope.ok, false)
+      assert.equal(envelope.error.exit, EXIT.needsHuman)
+      assert.match(envelope.error.detail, /terminal-only/, label)
+      assert.match(envelope.error.detail, /--yes does NOT bypass/, label)
+      assert.doesNotMatch(envelope.error.detail, /No usable Telegram session/, 'it was refused before a session was looked for')
+    })
+
+    // demote only takes rights away: it is NOT terminal-only, so --yes gets it past the gate.
+    // (Driven only as far as the gate: without --yes it still stops there, with the ordinary message.)
+    const demote = await run(['group', 'demote', chat, '42'], { TG_NON_INTERACTIVE: '1' })
+    assert.equal(demote.code, EXIT.needsHuman)
+    assert.match(demote.stdout, /without --yes/)
+    assert.doesNotMatch(demote.stdout, /terminal-only/)
+  })
+})
+
+test('eval-173 the moderation cap refuses through the real CLI, offline, before a session, with the cap exit code', async () => {
+  const entry = fileURLToPath(new URL('../src/index.ts', import.meta.url))
+  const tsx = fileURLToPath(new URL('../node_modules/tsx/dist/esm/index.mjs', import.meta.url))
+
+  await withTempDir(async () => {
+    seedModerationLog(50)
+    const run = (args: string[], env: Record<string, string> = {}) => new Promise<{ code: number | null; stdout: string }>((done) => {
+      execFile(
+        process.execPath,
+        ['--import', tsx, entry, ...args],
+        { env: { ...process.env, TG_NON_INTERACTIVE: '1', TG_NO_UPDATE: '1', ...env }, cwd: process.cwd() },
+        (error, stdout) => done({ code: error ? (error as { code?: number }).code ?? 1 : 0, stdout })
+      )
+    })
+
+    const chat = String(CHAT)
+    const verbs: string[][] = [
+      ['group', 'ban', chat, '42', '--yes'],
+      ['group', 'unban', chat, '42', '--yes'],
+      ['group', 'restrict', chat, '42', '--deny', 'send-media', '--yes'],
+      ['group', 'demote', chat, '42', '--yes'],
+      ['group', 'kick-member', chat, '42', '--yes'],
+      ['group', 'add-members', chat, '42', '--yes']
+    ]
+    const results = await Promise.all(verbs.map((args) => run([...args, '--json'])))
+    results.forEach((result, i) => {
+      const label = `tg ${verbs[i]!.join(' ')}`
+      assert.equal(result.code, EXIT.notConfigured, `${label} exited ${result.code}`)
+      const envelope = JSON.parse(result.stdout) as { ok: boolean; error: { exit: number; detail: string } }
+      assert.equal(envelope.ok, false)
+      assert.match(envelope.error.detail, /Daily moderation cap reached \(50\/50/, label)
+      assert.doesNotMatch(envelope.error.detail, /No usable Telegram session/, 'refused before a session was looked for')
+    })
+
+    // A malformed cap refuses instead of silently turning the guard off.
+    const broken = await run(['group', 'ban', chat, '42', '--yes', '--json'], { TG_MAX_MODERATION_PER_DAY: '5O' })
+    assert.equal(broken.code, EXIT.notConfigured)
+    assert.match(broken.stdout, /not a whole number/)
+
+    // send log shows the budget, so an operator can see where they stand.
+    const log = await run(['send', 'log'])
+    assert.equal(log.code, 0)
+    assert.match(log.stdout, /50\/50 people moderated in the last 24h/)
+  })
+})
+
+test('eval-174 the command layer asks for a terminal on promote only, always prompts there, and checks the cap before a session', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/cli/commands/group.ts', import.meta.url)),
+    'utf-8'
+  )
+  const actions = [...source.matchAll(/\.command\('([a-z-]+) [^']*'\)([\s\S]*?)\.action\(async \([^)]*\) => \{([\s\S]*?)\n {6}\}\)/g)]
+  const body = (verb: string): string => {
+    const found = actions.find((m) => m[1] === verb)
+    assert.ok(found, `no ${verb} action found`)
+    return found[3]!
+  }
+
+  // promote: the terminal rule is the first gate, ahead of the session, and --yes is not what the prompt keys on.
+  const promote = body('promote')
+  assert.match(promote, /assertConfirmed\(options, \{ terminalOnly: /)
+  assert.ok(promote.indexOf('terminalOnly') < promote.indexOf('withAuthenticatedClient'))
+  assert.match(promote, /confirmPeople\(target, 'make this person an ADMIN', \[person\], false, notes\)/, 'always asks')
+
+  // Nothing else is terminal-only: the class is exactly the verbs that are listed in gate.ts.
+  assert.equal([...source.matchAll(/terminalOnly:/g)].length, 1)
+  assert.ok(!body('demote').includes('terminalOnly'), 'demote only takes rights away')
+
+  // Every person-directed verb checks the moderation cap before it opens a session.
+  for (const verb of ['add-members', 'kick-member', 'ban', 'unban', 'restrict', 'promote', 'demote']) {
+    const text = body(verb)
+    const cap = text.indexOf('assertUnderModerationCap(')
+    assert.ok(cap !== -1, `${verb} does not check the moderation cap`)
+    assert.ok(cap < text.indexOf('withAuthenticatedClient'), `${verb} must check the cap before a session opens`)
+  }
 })
