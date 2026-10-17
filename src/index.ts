@@ -31,7 +31,7 @@ import { registerDoctorCommand } from './cli/commands/doctor.js'
 import { scheduleUpdateCheck } from './update/index.js'
 import { EXIT } from './exit-codes.js'
 
-const VERSION = '0.7.1'
+const VERSION = '0.8.0'
 
 const program = new Command()
   .name('tg')
