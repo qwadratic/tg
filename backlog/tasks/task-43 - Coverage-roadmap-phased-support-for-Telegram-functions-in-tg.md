@@ -4,7 +4,7 @@ title: 'Coverage roadmap: phased support for Telegram functions in tg'
 status: To Do
 assignee: []
 created_date: '2026-10-17 09:04'
-updated_date: '2026-10-17 09:08'
+updated_date: '2026-10-17 10:22'
 labels:
   - roadmap
   - coverage
@@ -128,9 +128,9 @@ Writes (one decision record per phase, `backlog/decisions/<date>-widen-the-fence
 | destroys history or cannot be undone | delete history, TTL, topic history, delete chat, username release, revoke link | varies | 0 | ownership check or archive-first guard, irreversibility spelled out, TTY-only for the worst |
 | account and security | privacy rules, profile, sessions | everyone viewing the profile | 0 | before/after in the prompt; anything that widens exposure is TTY-only |
 
-- New guard class, proposed here: **TTY-only**. The verb refuses a non-interactive run with exit 3 even when `--yes` is passed, because for these the operator's presence is the point and `--yes` is too easy to add. Precedent: `session phones --reveal` already refuses without a terminal.
+- Guard class **TTY-only**, shipped in 0.7.1 (D13e-a, operator's answer of 2026-10-17): the verb refuses a non-interactive run with exit 3 even when `--yes` is passed, and at a terminal it always asks, because for these the operator's presence is the point and `--yes` is too easy to add. Precedent: `session phones --reveal` already refuses without a terminal. It lives in `src/send/gate.ts` (`assertInteractive`, `assertConfirmed(options, { terminalOnly })`, `TTY_ONLY_KINDS`, enforced by `guardedSend` itself), so a later verb joins it by adding its audit kind. Today only `promote` is on it; `demote` only removes rights and stays under the ordinary gate.
 - **Archive-first guard** for anything that destroys history (`delete-history`, TTL, topic history): refuse with exit 2 unless the chat is outside the tracked config, is in `excludeChatIds`, or its sync watermark already covers the latest message. D13c's reason: "deletion and TTL destroy history that this tool exists to archive".
-- Batch and counter limits mirror D13d (`add-members` at most 20, stop on flood). In the 0.7.0 worktree `ban` and `unban` take at most 20 numeric ids per call with one RPC and one audit line per person (a `targetUserId` field on the log record). Because a shell loop can still drive person-directed verbs, 0.11 adds a per-run counter for them and a per-day counter for joins in `gate.ts`, documented in AGENTS.md next to the send caps as "do not raise".
+- Batch and counter limits mirror D13d (`add-members` at most 20, stop on flood). In the 0.7.0 worktree `ban` and `unban` take at most 20 numeric ids per call with one RPC and one audit line per person (a `targetUserId` field on the log record). Because a shell loop can still drive person-directed verbs, 0.7.1 added a per-day moderation counter in `gate.ts` (D13e-a): `add-members`, `kick-member`, `ban`, `unban`, `restrict`, `promote` and `demote` count one per person against `TG_MAX_MODERATION_PER_DAY` (default 50), apart from the send caps, from the audit log, refused whole with the cap exit code, documented in AGENTS.md next to the send caps as "do not raise". 0.11 adds the per-day join cap the same way. The per-run counter proposed earlier (default 5) was dropped: it would contradict the 20-person call limit, and the operator asked for the per-day counter only.
 - Every write phase: README tables, `skill/SKILL.md`, AGENTS.md layout table; version literal in `src/index.ts` and `package.json` together (eval-72); new evals continue after the highest existing number (eval-163 once 0.7.0 lands); the fence is tripwire-verified by injecting a call and watching eval-29 fail (D14); tests use mocked clients, no network.
 
 ## 5. Phases
@@ -197,10 +197,10 @@ The D13/D13a class: content or signals on someone else's screen. Everything here
 
 The Tier 2 and Tier 3 remainder after 0.7.0, plus the guard classes and counters that D13c and D13d imply and that 0.7.0's verbs also need.
 - RPCs added to `WRITE_RPCS`: `setChatDefaultPermissions`, `joinChat`, `leaveChat`, `hideJoinRequest`, `revokeInviteLink`, `deleteChatPhoto`, `deleteHistory`, `reorderPinnedForumTopics`, `deleteForumTopicHistory`, `updateForumSettings`, `toggleGeneralTopicHidden`; `setChatTtl` is already fenced by D13e and is called for the first time here. Added to `WRITE_TL_METHODS`: `messages.setChatAvailableReactions`, `channels.toggleSignatures`, `channels.toggleAntiSpam`, `channels.toggleParticipantsHidden`.
-- Guard classes and counters introduced here and retrofitted onto 0.7.0's verbs where D13e lacks them: a per-run counter for person-directed verbs (proposed default 5; covers ban, unban, restrict, promote, demote, kick, add-members) so repeated calls are bounded as well as one call; the TTY-only class (below) for `promote`, which also gets a before/after rights printout and refuses to grant `addAdmins` unless `--allow-add-admins` is given (chain escalation).
+- Guard classes and counters: the TTY-only class and the per-day moderation counter for 0.7.0's person-directed verbs already shipped in 0.7.1 (D13e-a), so 0.11 only reuses them. Still here: `promote` gets a before/after rights printout and refuses to grant `addAdmins` unless `--allow-add-admins` is given (chain escalation).
 - `default-permissions` is the same shape as `restrict` but for everyone in the chat: named flags only, before/after in the prompt.
 - Joins: one per call, per-day join cap counted from the audit log (proposed `TG_MAX_JOINS_PER_DAY`, default 5), because bulk joining is a spam shape and Telegram throttles it. `hideJoinRequest` approves or declines one request at a time.
-- Destructive set (`delete-history`, `ttl`, `topic-delete-history`): TTY-only and archive-first. `deleteGroup` (legacy) stays deferred as in D13d and D13e.
+- Destructive set (`delete-history`, `ttl`, `topic-delete-history`): TTY-only (the class from 0.7.1: add the audit kinds to `TTY_ONLY_KINDS`) and archive-first. `deleteGroup` (legacy) stays deferred as in D13d and D13e.
 - Error map extended and tested per mapping for the new verbs, and checked against 0.7.0's: `USER_PRIVACY_RESTRICTED`, `USER_NOT_PARTICIPANT`, `USER_ADMIN_INVALID`, `CHANNELS_TOO_MUCH`, `INVITE_HASH_EXPIRED`, `INVITE_REQUEST_SENT`, `CHAT_ADMIN_REQUIRED` (3), `FLOOD_WAIT`/`PEER_FLOOD` (6).
 - Not added: `hideAllJoinRequests`, `joinChatlist`, `deleteUserHistory` (section 6).
 
@@ -210,15 +210,15 @@ A new tier (call it Tier 4, account), not in D13c.
 - RPCs: `updateProfile`, `setMyUsername`, `setMyProfilePhoto`, `deleteProfilePhotos`, `setMyBirthday`, `setEmojiStatus`, `hideMyStoriesViews`; raw `account.setPrivacy`, `account.setGlobalPrivacySettings`.
 - `setMyUsername` carries the same irreversibility wording as `remove-username`: the old handle returns to the pool at once.
 - `account privacy set <key> ...` prints current and new rules, takes numeric ids in allow/deny lists, and any change that widens exposure (toward "everybody") is TTY-only.
-- Session revocation: record the decision either way. If built, `account.resetAuthorization` for ONE session by hash taken from `account sessions`, refusing the current session, printing the device label, TTY-only. Reason for care: each workspace owns its own auth key (D3, AGENTS.md), so revoking the wrong row kills another workspace. `auth.resetAuthorizations` (all sessions) never.
+- Session revocation: decided case by case, not a permanent never (operator, 2026-10-17). If built, `account.resetAuthorization` for ONE session by hash taken from `account sessions`, refusing the current session, printing the device label, TTY-only. Reason for care: each workspace owns its own auth key (D3, AGENTS.md), so revoking the wrong row kills another workspace. `auth.resetAuthorizations` (all sessions) is not built and stays absent until its own decision record admits it; one session by hash is the form to weigh first.
 
-### 0.13 Publish and extend (22 methods): D13k, optional
+### 0.13 Publish and extend (22 methods): D13k, deferred
 
-Long tail. Build only on request.
+Long tail. Deferred (operator, 2026-10-17): build only on an explicit request.
 - Stories: `sendStory`, `editStory`, `deleteStories`, `toggleStoriesPinned`, `togglePeerStoriesArchived`, `sendStoryReaction`, `canSendStory`. A story is a public post: one unit, prompt states the audience. `incrementStoriesViews` and `readStories` stay out (view receipts leak that a human is awake, D13a).
 - Sticker sets (`createStickerSet`, `addStickerToSet`, `deleteStickerFromSet`, `moveStickerInSet`, `replaceStickerInSet`, `setStickerSetThumb`): only sets from `getMyStickerSets`, ownership checked before the RPC, as `delete` does for chats.
 - `getBotInfo`/`setBotInfo` for bots you own, `applyBoost` (spends a slot that cannot be moved for a while), `togglePinnedStarGifts`, business profile (`setBusinessIntro`, `setBusinessWorkHours`, chat link create/edit/delete).
-- Stays out: business away, greeting and quick-reply automation and connected bots (section 6).
+- Stays out for now: business away, greeting and quick-reply automation and connected bots (section 6: case by case, each needs its own decision record).
 
 ### 1.0 Operator-complete
 
@@ -230,8 +230,9 @@ Reached when 0.7.0 and 0.8-0.12 are shipped (0.13 optional). The manifest has no
 | --- | --- | --- |
 | mass or bulk messaging: loops over many peers, `--peers-file`, multi-destination forward/copy, `add-members` beyond the D13d cap of 20 per call, `hideAllJoinRequests`, `joinChatlist` | AGENTS.md: "a burst of outbound messages from a user account is what earns a report and a ban"; the 5/run and 20/day caps are not raised (D13); D13d capped `add-members` at 20 for the same reason | TASK-25 outreach queue (human review, drip within caps, human-invoked) or drafts (0.9) that a human sends |
 | any write reachable from an unattended path: auto-reply, auto-react, update handlers, timers | eval-30/31 make "a cron job cannot message anyone" a fact; `disableUpdates: true` is deliberate | none; keep tg pull-based |
-| automation Telegram runs on the account's behalf: business away/greeting/quick replies, `messages.sendQuickReplyMessages`, connected bots (`account.updateConnectedBot` hands every chat to a third party) | same burst shape with tg out of the loop, no cap can apply | the operator sets these in the Telegram app |
-| account takeover or lockout: 2FA set/change/remove (6 methods), `account.changePhone`, `account.deleteAccount`, `account.setAccountTTL`, `account.setAuthorizationTTL`, `account.invalidateSignInCodes`, `auth.resetAuthorizations` | AGENTS.md: only a human creates a session; never move or print one; D3: each workspace owns its own auth key, and resetting all sessions kills sibling workspaces | Telegram app, by the operator |
+| not added yet, decided case by case (operator, 2026-10-17: not a permanent never): automation Telegram runs on the account's behalf: business away/greeting/quick replies, `messages.sendQuickReplyMessages`, connected bots (`account.updateConnectedBot` hands every chat to a third party) | same burst shape with tg out of the loop, so no cap here can apply; each one needs its own decision record that answers that | the operator sets these in the Telegram app until a record admits one |
+| account takeover or lockout: 2FA set/change/remove (6 methods), `account.changePhone`, `account.deleteAccount`, `account.setAccountTTL`, `account.setAuthorizationTTL`, `account.invalidateSignInCodes` | AGENTS.md: only a human creates a session; never move or print one | Telegram app, by the operator |
+| not added yet, decided case by case (operator, 2026-10-17): session revocation, `account.resetAuthorization` (one session) and `auth.resetAuthorizations` (all sessions) | D3: each workspace owns its own auth key, so revoking the wrong row, and above all all sessions, kills sibling workspaces; if built, one session by hash, TTY-only, never the current one (0.12) | Telegram app, Active Sessions, until a record admits one |
 | money: all Stars and gift spending or transfer (9 gift methods, `getStarGiftWithdrawalUrl`, `sendPaidReaction`, pre-checkout answers) | caps bound messages, not money; there is no spend ledger or limit in the fence | read-only Stars and gift views (0.8) |
 | presence and read-receipt leaks with no operator use: `setTyping`/`sendTyping`, `setOnline`/`sendOnline`, marking stories viewed | D13a: a read receipt tells the other party a human is awake, and an unattended run leaks that | none |
 | harassment-shaped: `messages.report`, `messages.reportSpam`, `account.reportPeer`, `channels.reportSpam`, `deleteUserHistory`, `getNearbyChats` | irreversible effects on third parties, or location privacy; no operator workflow justifies an agent doing them | Telegram app |
@@ -249,11 +250,13 @@ Reached when 0.7.0 and 0.8-0.12 are shipped (0.13 optional). The manifest has no
 
 ## 8. Open questions for the operator
 
-1. Is the new TTY-only guard class acceptable, or should those verbs use `--yes` like the rest? And should it be retrofitted onto 0.7.0's `promote` in 0.11 as written, or earlier, since promote ships before the class exists?
-2. Are the new per-run person-directed counter and per-day join counter in `gate.ts` acceptable, or should they fold into the existing caps?
-3. Split `src/send/index.ts` by area (fence becomes a directory), or keep one file?
-4. Do business automation and session revocation stay out for good, or is a decision wanted?
-5. Is 0.13 (publish and extend) wanted at all, or does the roadmap stop at 1.0 after 0.12?
+Answered by the operator on 2026-10-17 with «делай как рекомендуешь» (recorded in `backlog/decisions/2026-10-17-tty-only-guard-and-moderation-counter.md`, D13e-a):
+
+1. RESOLVED. The TTY-only guard class is accepted: history deletion, chat TTL and admin rights run only from an interactive terminal, `--yes` does not bypass it, unattended runs exit 3. Applied to `promote` now, in 0.7.1, not in 0.11 (`demote` only removes rights and stays under the normal gate). History deletion and TTL are not shipped; 0.11 reuses the class.
+2. RESOLVED. Separate per-day counters, not folded into the send caps: ban, unban, restrict, promote, demote, kick-member and add-members count one per person against `TG_MAX_MODERATION_PER_DAY` (default 50), logged, over cap refused with the repo's cap exit code (4); per-call limit of 20 kept. Shipped in 0.7.1. The per-day join cap stays in 0.11.
+3. STILL OPEN. Split `src/send/index.ts` by area (fence becomes a directory), or keep one file? Not covered by the 2026-10-17 answer; AC #12 still requires the decision before 0.10.
+4. RESOLVED. Business automation and session revocation are decided case by case, not a permanent never; section 6 wording updated, each needs its own decision record when asked for.
+5. RESOLVED. 0.13 (publish and extend) is deferred: built only on an explicit request. The roadmap runs to 1.0 after 0.12 without it.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -280,14 +283,20 @@ Reached when 0.7.0 and 0.8-0.12 are shipped (0.13 optional). The manifest has no
 - [ ] #20 0.10: send album costs one unit per item and is refused above the caps with a usage error; send copy costs one unit per message id, logs fromPeerId, names both chats in the prompt, states there is no forwarded-from header, and is refused for protected-content chats
 - [ ] #21 0.10: send react costs one unit; pin-message and unpin-message cost 0; poll vote and poll close state irreversibility in the prompt; a CLI-shape test asserts no send verb accepts more than one destination peer
 - [ ] #22 0.11: decision D13i is recorded; setChatDefaultPermissions, joinChat, leaveChat, hideJoinRequest, revokeInviteLink, deleteChatPhoto, deleteHistory, reorderPinnedForumTopics, deleteForumTopicHistory, updateForumSettings and toggleGeneralTopicHidden are in WRITE_RPCS, setChatTtl (already fenced by D13e) is called for the first time, and the four raw channel and reaction RPCs are in WRITE_TL_METHODS
-- [ ] #23 0.11: a per-run counter for person-directed verbs (ban, unban, restrict, promote, demote, kick-member, add-members) and a per-day join cap read from the audit log exist in gate.ts, are documented in AGENTS.md as do-not-raise, and hideJoinRequest names the person and the chat in its prompt
-- [ ] #24 0.11: the TTY-only guard class exists and promote (retrofit from 0.7.0), delete-history, ttl and topic-delete-history exit 3 on a non-interactive run even with --yes; promote prints before and after rights and refuses to grant addAdmins without --allow-add-admins
+- [ ] #23 0.11: a per-day join cap read from the audit log exists in gate.ts and is documented in AGENTS.md as do-not-raise next to the send caps and the moderation cap, and hideJoinRequest names the person and the chat in its prompt (the person-directed per-day moderation counter itself shipped in 0.7.1, D13e-a)
+- [ ] #24 0.11: delete-history, ttl and topic-delete-history use the TTY-only guard class that shipped in 0.7.1 with promote (D13e-a) and exit 3 on a non-interactive run even with --yes; promote prints before and after rights and refuses to grant addAdmins without --allow-add-admins
 - [ ] #25 0.11: delete-history and ttl refuse with exit 2 unless the chat is untracked, excluded, or fully synced to its latest message; the refusal names which condition failed
 - [ ] #26 0.11: hideAllJoinRequests, joinChatlist and deleteUserHistory are absent from src and from WRITE_RPCS and deleteGroup stays fenced but uncalled, asserted by a test, and every new Telegram error maps to a readable message and an exit code with one test per mapping
 - [ ] #27 0.12: decision D13j is recorded for updateProfile, setMyUsername, setMyProfilePhoto, deleteProfilePhotos, setMyBirthday, setEmojiStatus, hideMyStoriesViews, account.setPrivacy and account.setGlobalPrivacySettings
 - [ ] #28 0.12: setMyUsername states that the old handle returns to the pool at once; account privacy set prints current and new rules, takes numeric ids, and any widening change is TTY-only
-- [ ] #29 0.12: the session revocation question is decided in writing; if built, it revokes one session by hash, refuses the current session, prints the device label and is TTY-only, and auth.resetAuthorizations stays absent
+- [ ] #29 0.12: the session revocation question is decided case by case in writing (operator, 2026-10-17: not a permanent never); if built, it revokes one session by hash, refuses the current session, prints the device label and is TTY-only, and auth.resetAuthorizations stays absent until its own decision record admits it
 - [ ] #30 0.12: a test asserts the 2FA methods, account.changePhone, account.deleteAccount, account.setAccountTTL, setOnline and sendOnline appear nowhere in src
-- [ ] #31 0.13: only if the operator asks: decision D13k covers stories, own sticker sets, bot info, applyBoost, pinned gifts and the business profile; story posting costs one unit and names the audience, sticker verbs check ownership through getMyStickerSets first, and business away, greeting, quick-reply and connected-bot RPCs stay absent
+- [ ] #31 0.13: deferred, built only on an explicit operator request (2026-10-17): decision D13k covers stories, own sticker sets, bot info, applyBoost, pinned gifts and the business profile; story posting costs one unit and names the audience, sticker verbs check ownership through getMyStickerSets first, and business away, greeting, quick-reply and connected-bot RPCs stay absent until each has its own decision record
 - [ ] #32 1.0: the manifest has no planned entry left, README, SKILL.md and AGENTS.md command tables are checked against it by a test, TASK-41's stale group-admin non-goal is corrected, and 1.0.0 is tagged only on the operator's word
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-17: open questions answered by the operator ("делай как рекомендуешь"): TTY-only guard class accepted and applied to promote now (0.7.1), separate per-day moderation counter (default 50, exit 4), business automation and session revocation decided case by case, 0.13 deferred. Question 3 (split src/send/index.ts) was not covered and stays open. Recorded in backlog/decisions/2026-10-17-tty-only-guard-and-moderation-counter.md (D13e-a); ACs 23, 24, 29 and 31 reworded to match.
+<!-- SECTION:NOTES:END -->
