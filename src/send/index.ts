@@ -5,6 +5,14 @@ import { tl, type TelegramClient } from '@mtcute/node'
 import { OperatorError } from '../errors.js'
 import { EXIT } from '../exit-codes.js'
 import { assertPeerId } from '../peers/id.js'
+import {
+  ADMIN_RIGHTS,
+  RESTRICTIONS,
+  type AdminRightName,
+  type AdminRights,
+  type RestrictionName,
+  type Restrictions
+} from '../groups/rights.js'
 import { assertConfirmed, guardedSend, type SentRecord } from './gate.js'
 import { probeVideo, type VideoMeta } from '../media/probe.js'
 
@@ -21,8 +29,9 @@ import { probeVideo, type VideoMeta } from '../media/probe.js'
  * The fenced verb set is: `tg send text`, `tg send media`, `tg send rm`,
  * `tg send forward`, `tg send edit`, `tg send read`, the seven chat-state verbs
  * (`archive`, `unarchive`, `pin`, `unpin`, `mute`, `unmute`, `unread`),
- * `tg note` and the read-only `tg send log`. Widening it again means a decision
- * file, per
+ * `tg note` and the read-only `tg send log`, plus the `tg group` administration
+ * verbs (D13c; membership and owner-only delete, D13d; ban, unban, restrict,
+ * promote and demote, D13e). Widening it again means a decision file, per
  * backlog/decisions/2026-08-17-narrow-the-no-write-back-rule-and-build-the-missing-gates.md
  * and its 2026-08-19 amendment.
  *
@@ -1063,7 +1072,7 @@ export async function addChatMembers(
         const result = await tg.addChatMembers(peerId, [user], {})
         missing = result.length > 0
         return { id: user }
-      }, { units: 0 })
+      }, { units: 0, targetUserId: user })
       if (missing) {
         failed.push({ user, reason: 'privacy', message: `The user's privacy settings forbid being added. ${INVITE_HINT}` })
       } else {
@@ -1097,7 +1106,7 @@ export async function kickChatMember(
     } catch (error) {
       throw friendlyTelegramError(error)
     }
-  }, { units: 0 })
+  }, { units: 0, targetUserId: userId })
 }
 
 /**
@@ -1130,4 +1139,490 @@ export async function deleteChat(
     }
     return { id: 0 }
   }, { units: 0 })
+}
+
+/**
+ * Moderation and admin rights (D13e).
+ *
+ * `ban`, `unban`, `restrict`, `promote` and `demote`: still one PERSON per RPC
+ * and one audit line each, still zero cap units (none delivers a message), still
+ * behind the confirmation gate. What is new is the weight of two of them: a ban
+ * is not undone by an unban in the eyes of everybody who watched it, and
+ * `promote` hands another human power over the chat.
+ *
+ * Every one needs a supergroup or channel. A legacy group has no ban, no
+ * restriction and no admin rights in Telegram's model (mtcute's ban there is a
+ * plain removal, its unban a no-op), so reporting "banned" for it would be a
+ * lie; the verbs refuse such a chat up front, from the id alone, with no round
+ * trip. The one thing deliberately NOT reachable from here is ownership: there
+ * is no transfer, and `promote` refuses anything that reads as "all rights".
+ */
+
+/** Telegram's marked ids: a supergroup or channel is below this, a legacy group is between it and zero. */
+const FIRST_CHANNEL_MARK = -1_000_000_000_000
+
+function assertSupergroupId(peerId: number, verb: string, hint: string): void {
+  if (peerId < FIRST_CHANNEL_MARK) return
+  throw new OperatorError(
+    `${verb} needs a supergroup or channel, and ${peerId} is not one (it is a legacy group, a private chat or a user). ${hint}`,
+    EXIT.usage
+  )
+}
+
+/** A person is a positive user id: a chat or channel id is never somebody to ban or promote. */
+function assertUserId(raw: string | number): number {
+  const id = assertPeerId(raw)
+  if (id < 0) {
+    throw new OperatorError(
+      `${id} is a chat or channel id, not a person. Give a user's numeric id: tg peers find <name> --id-only`,
+      EXIT.usage
+    )
+  }
+  return id
+}
+
+/** One call touches at most this many people, de-duplicated, at least one. */
+function assertPeople(raw: readonly (string | number)[], what: string): number[] {
+  if (raw.length === 0) throw new OperatorError(`Give at least one user id to ${what}.`, EXIT.usage)
+  if (raw.length > MAX_MEMBERS_PER_CALL) {
+    throw new OperatorError(
+      `Too many users (${raw.length}). ${what[0]!.toUpperCase()}${what.slice(1)} at most ${MAX_MEMBERS_PER_CALL} per call.`,
+      EXIT.usage
+    )
+  }
+  return [...new Set(raw.map((id) => assertUserId(id)))]
+}
+
+const UNTIL_MIN_MS = 30_000
+const UNTIL_MAX_MS = 366 * 24 * 60 * 60 * 1000
+
+/**
+ * `until` as UNIX ms, refused unless Telegram will honour it.
+ *
+ * Telegram reads an end date under ~30 seconds ahead or over 366 days out as
+ * FOREVER, and mtcute's seconds field wraps past 2038, which also means
+ * forever. A caller who asked for a short ban and silently got a permanent one
+ * cannot tell, so anything outside the window is refused instead of passed on.
+ */
+export function assertUntil(until: number | undefined, now = Date.now()): number | undefined {
+  if (until === undefined) return undefined
+  if (!Number.isFinite(until)) throw new OperatorError(`Not a usable end date: ${until}.`, EXIT.usage)
+  if (until < now + UNTIL_MIN_MS) {
+    throw new OperatorError(
+      `The end date ${new Date(until).toISOString()} is not at least 30 seconds away, which Telegram reads as FOREVER. Omit it if you mean forever.`,
+      EXIT.usage
+    )
+  }
+  if (until > now + UNTIL_MAX_MS) {
+    throw new OperatorError(
+      `The end date ${new Date(until).toISOString()} is more than 366 days away, which Telegram also reads as FOREVER. Omit it if you mean forever.`,
+      EXIT.usage
+    )
+  }
+  return until
+}
+
+const untilDetail = (until: number | undefined): string =>
+  until === undefined ? 'until=forever' : `until=${new Date(until).toISOString()}`
+
+export type MemberFailureReason =
+  | 'flood' | 'not_admin' | 'target_is_admin' | 'target_is_creator' | 'not_member'
+  | 'invalid_user' | 'invalid_chat' | 'too_many_admins' | 'invalid_rank' | 'skipped' | 'other'
+
+export interface MemberFailure {
+  user: number
+  reason: MemberFailureReason
+  message: string
+  /** The repo exit code this refusal maps to (see AGENTS.md). */
+  exit: number
+}
+
+export interface MemberBatchResult {
+  /** People the action was applied to, in the order given. */
+  done: number[]
+  failed: MemberFailure[]
+}
+
+/** The exit code of a batch: 0 when it all worked, else the code of the first refusal. */
+export function memberBatchExit(result: MemberBatchResult): number {
+  return result.failed[0]?.exit ?? EXIT.ok
+}
+
+/**
+ * Telegram's refusals to act on a person, as a stable reason and a repo exit code.
+ *
+ * `stop` means the next person would meet the same wall (no rights, a flood, an
+ * unknown chat), so a batch halts rather than hammering Telegram. Anything not
+ * listed is `other` with exit 1: an unknown failure stays a bug with its stack,
+ * like everywhere else in this CLI.
+ */
+export function classifyMemberFailure(
+  error: unknown
+): { reason: MemberFailureReason; message: string; exit: number; stop: boolean } {
+  if (tl.RpcError.is(error, 'FLOOD_WAIT_%d')) {
+    return { reason: 'flood', message: `Telegram asked us to wait ${error.seconds}s. Not retried: retry after that.`, exit: EXIT.upstream, stop: true }
+  }
+  if (tl.RpcError.is(error, 'PEER_FLOOD')) {
+    return { reason: 'flood', message: 'Telegram is throttling this account for too many requests. Wait a while before retrying.', exit: EXIT.upstream, stop: true }
+  }
+  if (tl.RpcError.is(error, 'CHAT_ADMIN_REQUIRED') || tl.RpcError.is(error, 'RIGHT_FORBIDDEN')) {
+    return {
+      reason: 'not_admin',
+      message: 'This account is not an admin in that chat, or lacks the right for this. A human must grant it first.',
+      exit: EXIT.needsHuman,
+      stop: true
+    }
+  }
+  if (tl.RpcError.is(error, 'USER_ADMIN_INVALID')) {
+    return {
+      reason: 'target_is_admin',
+      message: 'That person is an admin this account may not change (it did not appoint them, or lacks the right). A human must deal with it.',
+      exit: EXIT.needsHuman,
+      stop: false
+    }
+  }
+  if (tl.RpcError.is(error, 'USER_CREATOR')) {
+    return { reason: 'target_is_creator', message: 'That person created the chat; nothing can be done to them here.', exit: EXIT.usage, stop: false }
+  }
+  if (tl.RpcError.is(error, 'USER_NOT_PARTICIPANT')) {
+    return { reason: 'not_member', message: 'That person is not a member of the chat.', exit: EXIT.usage, stop: false }
+  }
+  if (
+    tl.RpcError.is(error, 'USER_ID_INVALID') ||
+    tl.RpcError.is(error, 'PARTICIPANT_ID_INVALID') ||
+    tl.RpcError.is(error, 'PEER_ID_INVALID')
+  ) {
+    return { reason: 'invalid_user', message: 'Telegram does not know that user id.', exit: EXIT.usage, stop: false }
+  }
+  if (
+    tl.RpcError.is(error, 'CHANNEL_INVALID') ||
+    tl.RpcError.is(error, 'CHANNEL_PRIVATE') ||
+    tl.RpcError.is(error, 'CHAT_ID_INVALID')
+  ) {
+    return { reason: 'invalid_chat', message: 'Telegram does not know that chat, or this account is not in it.', exit: EXIT.usage, stop: true }
+  }
+  if (tl.RpcError.is(error, 'ADMINS_TOO_MUCH')) {
+    return { reason: 'too_many_admins', message: 'The chat already has the most admins Telegram allows. A human must demote one first.', exit: EXIT.needsHuman, stop: true }
+  }
+  if (tl.RpcError.is(error, 'ADMIN_RANK_INVALID') || tl.RpcError.is(error, 'ADMIN_RANK_EMOJI_NOT_ALLOWED')) {
+    return { reason: 'invalid_rank', message: 'Telegram refused the custom title: at most 16 characters, and no emoji.', exit: EXIT.usage, stop: false }
+  }
+  return {
+    reason: 'other',
+    message: error instanceof Error ? error.message : String(error),
+    exit: EXIT.bug,
+    stop: false
+  }
+}
+
+/** The error a single-person verb throws: mapped when Telegram's answer is known, untouched (a bug) when not. */
+function memberRefusal(error: unknown): unknown {
+  const known = classifyMemberFailure(error)
+  return known.reason === 'other' ? error : new OperatorError(known.message, known.exit)
+}
+
+/**
+ * Apply one RPC per person, one audit line each, stopping at a wall.
+ *
+ * Nothing is retried and nothing sleeps: a flood limit, a missing right or an
+ * unknown chat halts the batch and the people not yet reached come back as
+ * `skipped` with the same exit code. A refusal about one person (they are an
+ * admin, they are not a member) is that person's alone and the batch goes on.
+ */
+async function eachPerson(
+  peerId: number,
+  kind: SentRecord['kind'],
+  users: number[],
+  detail: string,
+  run: (user: number) => Promise<number>
+): Promise<MemberBatchResult> {
+  const done: number[] = []
+  const failed: MemberFailure[] = []
+  let stopper: MemberFailure | null = null
+
+  for (const user of users) {
+    if (stopper) {
+      failed.push({
+        user,
+        reason: 'skipped',
+        message: `Not attempted: an earlier refusal (${stopper.reason}) stopped the batch.`,
+        exit: stopper.exit
+      })
+      continue
+    }
+    try {
+      await guardedSend(peerId, kind, 0, async () => ({ id: await run(user) }), {
+        units: 0,
+        targetUserId: user,
+        detail
+      })
+      done.push(user)
+    } catch (error) {
+      const known = classifyMemberFailure(error)
+      const failure: MemberFailure = { user, reason: known.reason, message: known.message, exit: known.exit }
+      failed.push(failure)
+      if (known.stop) stopper = failure
+    }
+  }
+
+  return { done, failed }
+}
+
+/**
+ * Ban people from a supergroup or channel: out, and unable to come back by themselves.
+ *
+ * `until` is UNIX ms; omitted means forever.
+ */
+export async function banMembers(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  rawUsers: readonly (string | number)[],
+  options: AdminOptions & { until?: number | undefined } = {}
+): Promise<MemberBatchResult> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  assertSupergroupId(peerId, 'ban', 'A legacy group has no ban: remove someone there with tg group kick-member.')
+  const users = assertPeople(rawUsers, 'ban')
+  const until = assertUntil(options.until)
+
+  return eachPerson(peerId, 'ban-member', users, untilDetail(until), async (userId) => {
+    const message = await tg.banChatMember({
+      chatId: peerId,
+      participantId: userId,
+      ...(until === undefined ? {} : { untilDate: until })
+    })
+    return message?.id ?? 0
+  })
+}
+
+/**
+ * Lift a ban or any restrictions, so the person MAY join again.
+ *
+ * It does not add anyone back. Telegram answers an unban of somebody who was
+ * never banned with success, so an unban line in the log means "the door is
+ * open", not "this person was banned".
+ */
+export async function unbanMembers(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  rawUsers: readonly (string | number)[],
+  options: AdminOptions = {}
+): Promise<MemberBatchResult> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  assertSupergroupId(peerId, 'unban', 'A legacy group has no ban to lift.')
+  const users = assertPeople(rawUsers, 'unban')
+
+  return eachPerson(peerId, 'unban-member', users, 'bans and restrictions lifted', async (userId) => {
+    await tg.unbanChatMember({ chatId: peerId, participantId: userId })
+    return 0
+  })
+}
+
+/** The names in a comma-separated list, trimmed, de-duplicated, order kept. */
+function nameList(raw: string): string[] {
+  return [...new Set(raw.split(',').map((part) => part.trim()).filter(Boolean))]
+}
+
+/**
+ * Check restriction names, from the CLI (`--deny a,b`) or a caller.
+ *
+ * `hasOwn`, not a plain lookup: `__proto__` and `constructor` would otherwise
+ * resolve to inherited Object members and walk past this check.
+ */
+export function parseRestrictionNames(names: string | readonly string[]): RestrictionName[] {
+  const list = typeof names === 'string' ? nameList(names) : [...new Set(names)]
+  if (list.length === 0) {
+    throw new OperatorError(
+      'Name at least one restriction to apply. To lift restrictions, use: tg group unban <peer> <user>',
+      EXIT.usage
+    )
+  }
+  for (const name of list) {
+    if (name === 'view-messages') {
+      throw new OperatorError('Not a restriction: view-messages is a ban. Use: tg group ban <peer> <user>', EXIT.usage)
+    }
+    if (!Object.hasOwn(RESTRICTIONS, name)) {
+      throw new OperatorError(
+        `Not a restriction: ${name}. One of: ${Object.keys(RESTRICTIONS).join(', ')}`,
+        EXIT.usage
+      )
+    }
+  }
+  return list as RestrictionName[]
+}
+
+/** The TL restriction object for a list of names: every named right set to true, which DISALLOWS it. */
+export function restrictionsFor(names: readonly RestrictionName[]): Restrictions {
+  const out: Restrictions = {}
+  for (const name of names) out[RESTRICTIONS[name]] = true
+  return out
+}
+
+/**
+ * Take specific abilities away from one member of a supergroup.
+ *
+ * Each named restriction is set to true, which means DISALLOWED: that is
+ * Telegram's own sense and it is passed through untranslated. At least one must
+ * be named; an empty object would lift every restriction, and that has its own
+ * verb (`unban`).
+ */
+export async function restrictMember(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  rawUser: string | number,
+  deny: string | readonly string[],
+  options: AdminOptions & { until?: number | undefined } = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  assertSupergroupId(peerId, 'restrict', 'A legacy group cannot restrict one member.')
+  const userId = assertUserId(rawUser)
+  const names = parseRestrictionNames(deny)
+  const until = assertUntil(options.until)
+
+  try {
+    return await guardedSend(peerId, 'restrict-member', 0, async () => {
+      await tg.restrictChatMember({
+        chatId: peerId,
+        userId,
+        restrictions: restrictionsFor(names),
+        ...(until === undefined ? {} : { until })
+      })
+      return { id: 0 }
+    }, { units: 0, targetUserId: userId, detail: `deny=${names.join(',')} ${untilDetail(until)}` })
+  } catch (error) {
+    throw memberRefusal(error)
+  }
+}
+
+/** Words that mean "everything" or "the chat itself", never accepted as a right. */
+const SWEEPING_RIGHT = /^(all|\*|everything|full|owner|creator|founder|transfer)$/i
+
+/**
+ * Check admin right names, from the CLI (`--rights a,b`) or a caller.
+ *
+ * Rights are granted by NAME, one at a time. There is no `all`, no wildcard and
+ * no ownership: those words are refused, and so is a list that names every
+ * right, which is the same grant spelled out. The guard is against the
+ * shortcut, not against an operator who wants a near-full admin and says so by
+ * leaving one out.
+ */
+export function parseAdminRightNames(names: string | readonly string[]): AdminRightName[] {
+  const list = typeof names === 'string' ? nameList(names) : [...new Set(names)]
+  if (list.length === 0) {
+    throw new OperatorError(
+      'Name at least one right to grant. To take admin rights away, use: tg group demote <peer> <user>',
+      EXIT.usage
+    )
+  }
+  for (const name of list) {
+    if (SWEEPING_RIGHT.test(name)) {
+      throw new OperatorError(
+        `Refusing "${name}": rights are named one by one, there is no "all", and ownership cannot be handed over here. ` +
+        `One of: ${Object.keys(ADMIN_RIGHTS).join(', ')}`,
+        EXIT.usage
+      )
+    }
+    if (!Object.hasOwn(ADMIN_RIGHTS, name)) {
+      throw new OperatorError(
+        `Not an admin right: ${name}. One of: ${Object.keys(ADMIN_RIGHTS).join(', ')}`,
+        EXIT.usage
+      )
+    }
+  }
+  if (list.length === Object.keys(ADMIN_RIGHTS).length) {
+    throw new OperatorError(
+      'Refusing to grant every right at once: that is an all-rights grant spelled out. Leave out the ones this person does not need.',
+      EXIT.usage
+    )
+  }
+  return list as AdminRightName[]
+}
+
+/** The TL admin-rights object for a list of names. */
+export function adminRightsFor(names: readonly AdminRightName[]): AdminRights {
+  const out: AdminRights = {}
+  for (const name of names) out[ADMIN_RIGHTS[name]] = true
+  return out
+}
+
+/** Telegram's limit on a custom admin title. */
+export const MAX_RANK_LENGTH = 16
+
+/** A custom admin title: 1-16 visible characters, or absent. */
+export function parseRank(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined
+  const rank = raw.trim()
+  const control = [...rank].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+  if (rank.length === 0 || [...rank].length > MAX_RANK_LENGTH || control) {
+    throw new OperatorError(
+      `Not an admin title: ${JSON.stringify(raw)}. Give 1-${MAX_RANK_LENGTH} characters, no emoji, or omit --rank.`,
+      EXIT.usage
+    )
+  }
+  return rank
+}
+
+/**
+ * Make somebody an admin with exactly the rights named, replacing any they had.
+ *
+ * Re-running with fewer rights narrows them. `add-admins` lets that person
+ * appoint further admins and is a privilege escalation in its own right, so
+ * the command layer says so in the prompt.
+ */
+export async function promoteAdmin(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  rawUser: string | number,
+  rights: string | readonly string[],
+  options: AdminOptions & { rank?: string | undefined } = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  assertSupergroupId(peerId, 'promote', 'Admin rights exist only in supergroups and channels.')
+  const userId = assertUserId(rawUser)
+  const names = parseAdminRightNames(rights)
+  const rank = parseRank(options.rank)
+
+  try {
+    return await guardedSend(peerId, 'promote-admin', 0, async () => {
+      await tg.editAdminRights({
+        chatId: peerId,
+        userId,
+        rights: adminRightsFor(names),
+        ...(rank === undefined ? {} : { rank })
+      })
+      return { id: 0 }
+    }, {
+      units: 0,
+      targetUserId: userId,
+      detail: `rights=${names.join(',')}${rank === undefined ? '' : ` rank=${JSON.stringify(rank)}`}`
+    })
+  } catch (error) {
+    throw memberRefusal(error)
+  }
+}
+
+/** Take every admin right away from somebody: they stay in the chat as a member. */
+export async function demoteAdmin(
+  tg: TelegramClient,
+  rawPeer: string | number,
+  rawUser: string | number,
+  options: AdminOptions = {}
+): Promise<SentRecord> {
+  const peerId = assertPeerId(rawPeer)
+  assertConfirmed(options)
+  assertSupergroupId(peerId, 'demote', 'Admin rights exist only in supergroups and channels.')
+  const userId = assertUserId(rawUser)
+
+  try {
+    return await guardedSend(peerId, 'demote-admin', 0, async () => {
+      // Empty rights is how Telegram spells "no longer an admin".
+      await tg.editAdminRights({ chatId: peerId, userId, rights: {} })
+      return { id: 0 }
+    }, { units: 0, targetUserId: userId, detail: 'rights=none' })
+  } catch (error) {
+    throw memberRefusal(error)
+  }
 }

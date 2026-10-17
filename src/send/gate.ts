@@ -38,6 +38,23 @@ export interface SentRecord {
    * the destination would make `tg send log` unable to answer that.
    */
   fromPeerId?: number
+  /**
+   * The PERSON a membership or admin-rights verb acted on, absent for every
+   * other kind.
+   *
+   * Same reasoning as `fromPeerId`: the risk such a write carries is not the
+   * chat, it is which human was removed, banned, muted or promoted. `peerId` is
+   * the chat, so forty `ban-member` lines would not say whether that was forty
+   * people or one person forty times - and the second is the harassment case
+   * the zero-unit decision (D13d, D13e) leans on this log to make visible. One
+   * RPC per person means one id per line.
+   */
+  targetUserId?: number
+  /**
+   * What a person-directed write set, in words: the rights granted, the
+   * restrictions applied, the end of a ban. Never message content.
+   */
+  detail?: string
   kind:
     | 'text' | 'photo' | 'video' | 'document' | 'delete' | 'forward' | 'edit' | 'read'
     // Chat state, private to the account owner: no counterparty ever sees these.
@@ -53,6 +70,8 @@ export interface SentRecord {
     // Membership and destruction (D13d). Unlike every verb above, these act on
     // a PERSON or destroy a chat outright rather than changing a setting.
     | 'add-member' | 'kick-member' | 'delete-chat'
+    // Moderation and admin rights (D13e). Each acts on one PERSON.
+    | 'ban-member' | 'unban-member' | 'restrict-member' | 'promote-admin' | 'demote-admin'
   /**
    * Message id on success, null on failure. For a delete, the first id removed;
    * for a forward, the first message created in the destination chat; for an
@@ -183,7 +202,7 @@ export async function guardedSend(
   kind: SentRecord['kind'],
   size: number,
   rpc: () => Promise<{ id: number }>,
-  extra: { units?: number; fromPeerId?: number; topicId?: number } = {}
+  extra: { units?: number; fromPeerId?: number; topicId?: number; targetUserId?: number; detail?: string } = {}
 ): Promise<SentRecord> {
   const units = extra.units ?? 1
   assertUnderCaps(units)
@@ -195,6 +214,8 @@ export async function guardedSend(
     size,
     ...(extra.fromPeerId === undefined ? {} : { fromPeerId: extra.fromPeerId }),
     ...(extra.topicId === undefined ? {} : { topicId: extra.topicId }),
+    ...(extra.targetUserId === undefined ? {} : { targetUserId: extra.targetUserId }),
+    ...(extra.detail === undefined ? {} : { detail: extra.detail }),
     ...(units === 1 ? {} : { units })
   }
 

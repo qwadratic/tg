@@ -1,6 +1,7 @@
 import assert from 'node:assert'
 import test from 'node:test'
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -115,6 +116,32 @@ test('eval-72 the CLI version matches package.json', () => {
     'src/index.ts VERSION and package.json version have drifted. An installed CLI ' +
     'would compare the registry against the wrong number and update in a loop.'
   )
+})
+
+test('eval-164 `npm version` keeps the CLI literal in step with package.json', async () => {
+  // eval-72 trips when the two drift, and `npm version minor` only edits
+  // package.json. The `version` lifecycle script is what closes that gap, so
+  // pin both that it is wired and that it rewrites the literal.
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8')) as { scripts: Record<string, string> }
+  assert.match(pkg.scripts.version ?? '', /scripts\/sync-version\.mjs/)
+  assert.match(pkg.scripts.version ?? '', /git add src\/index\.ts/, 'the rewritten file must join the version commit')
+
+  await withTempDir(() => {
+    mkdirSync('src')
+    writeFileSync('package.json', JSON.stringify({ version: '9.8.7' }), 'utf-8')
+    writeFileSync('src/index.ts', "import x from 'y'\n\nconst VERSION = '0.1.0'\n\nuse(VERSION)\n", 'utf-8')
+
+    execFileSync(process.execPath, [join(ROOT, 'scripts', 'sync-version.mjs')], { stdio: 'pipe' })
+
+    assert.equal(
+      readFileSync('src/index.ts', 'utf-8'),
+      "import x from 'y'\n\nconst VERSION = '9.8.7'\n\nuse(VERSION)\n"
+    )
+
+    // A file with no literal is a loud failure, never a silent no-op.
+    writeFileSync('src/index.ts', 'nothing here\n', 'utf-8')
+    assert.throws(() => execFileSync(process.execPath, [join(ROOT, 'scripts', 'sync-version.mjs')], { stdio: 'pipe' }))
+  })
 })
 
 test('eval-73 the notice never promises a background update that will not happen', () => {

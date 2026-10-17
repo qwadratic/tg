@@ -1,22 +1,30 @@
 import assert from 'node:assert'
 import test from 'node:test'
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tl, type Message, type TelegramClient } from '@mtcute/node'
 import {
   addChatMembers,
+  banMembers,
+  classifyMemberFailure,
   createChannel,
   createForumTopic,
   createGroup,
   createInviteLink,
   createSupergroup,
   deleteChat,
+  demoteAdmin,
   editForumTopic,
   editInviteLink,
   exportInviteLink,
   friendlyTelegramError,
   kickChatMember,
+  memberBatchExit,
+  parseAdminRightNames,
+  promoteAdmin,
+  restrictMember,
   sendMedia,
   sendText,
   setChatColor,
@@ -30,18 +38,22 @@ import {
   setForumTopicPinned,
   setJoinRequests,
   setJoinToSend,
-  setSlowMode
+  setSlowMode,
+  unbanMembers
 } from '../src/send/index.js'
 import { EXIT } from '../src/exit-codes.js'
 import { OperatorError } from '../src/errors.js'
 import { readSendLog, resetRunCounter, sendsToday } from '../src/send/gate.js'
 import {
+  listChatMembers,
   listForumTopics,
   listInviteLinks,
+  renderChatMembers,
   renderForumTopics,
   renderInviteLinks,
   renderInviteMembers
 } from '../src/groups/index.js'
+import { ADMIN_RIGHTS, RESTRICTIONS } from '../src/groups/rights.js'
 import { messageStats, renderDump } from '../src/dump/index.js'
 import { withTempDir } from './helpers.js'
 
@@ -236,11 +248,11 @@ test('eval-135 the group command layer gates on --yes before opening a session',
   const writes = actions.filter((body) => body.includes('assertConfirmed'))
   const reads = actions.filter((body) => !body.includes('assertConfirmed'))
 
-  assert.ok(writes.length >= 20, `expected the write actions, found ${writes.length}`)
-  // Three reads, and they are reads BECAUSE they call no write RPC.
-  assert.equal(reads.length, 3, 'only invite-list, invite-members and topic-list may skip the gate')
+  assert.ok(writes.length >= 25, `expected the write actions, found ${writes.length}`)
+  // Four reads, and they are reads BECAUSE they call no write RPC.
+  assert.equal(reads.length, 4, 'only invite-list, invite-members, members and topic-list may skip the gate')
   for (const body of reads) {
-    assert.ok(/list(InviteLinks|InviteLinkMembers|ForumTopics)\(/.test(body), 'an ungated action must be a read')
+    assert.ok(/list(InviteLinks|InviteLinkMembers|ChatMembers|ForumTopics)\(/.test(body), 'an ungated action must be a read')
   }
 
   for (const body of writes) {
@@ -257,13 +269,13 @@ test('eval-135 the group command layer gates on --yes before opening a session',
   // is not the same as the RESOLVED id being what gets passed on. No admin
   // function may receive the raw typed reference.
   assert.ok(
-    !/set[A-Z][A-Za-z]*\(tg,\s*peer\b|(?:create|edit|export)[A-Z][A-Za-z]*\(tg,\s*peer\b/.test(source),
+    !/set[A-Z][A-Za-z]*\(tg,\s*peer\b|(?:create|edit|export|ban|unban|restrict|promote|demote)[A-Z][A-Za-z]*\(tg,\s*peer\b/.test(source),
     'group.ts must never pass the raw typed reference to a write function'
   )
 
   // Every verb, write or read, must be scriptable.
   const verbs = [...source.matchAll(/\.command\('([a-z-]+) [^']*'\)([\s\S]*?)\.action\(/g)]
-  assert.ok(verbs.length >= 23, `expected every group verb, found ${verbs.length}`)
+  assert.ok(verbs.length >= 33, `expected every group verb, found ${verbs.length}`)
   for (const verb of verbs) {
     // Both groups are mandatory in the pattern: a match always carries them.
     assert.match(verb[2]!, /option\('--json'/, `tg group ${verb[1]!} does not accept --json`)
@@ -563,4 +575,503 @@ test('eval-149 the send command exposes --topic on text and media only', () => {
   )
   assert.equal([...source.matchAll(/--topic <topicId>/g)].length, 2)
   assert.ok(!/(sendText|sendMedia)\(tg,\s*peer\b/.test(source))
+})
+
+/**
+ * Moderation and admin rights (D13e): mocked client, never the network.
+ *
+ * Every verb here acts on one PERSON, so what these pin is the handling of
+ * people: numeric positive ids only, one RPC and one named audit line per
+ * person, stop at a wall without retrying, Telegram's refusals as the repo's
+ * exit codes, and a prompt gate that fires before any session exists.
+ */
+
+/** A client whose four moderation methods record what they were asked and answer per `behaviour`. */
+function memberClient(behaviour: Record<string, (params: unknown) => unknown> = {}): {
+  tg: TelegramClient
+  calls: [string, unknown][]
+} {
+  const calls: [string, unknown][] = []
+  const make = (name: string, fallback: unknown) => (params: unknown) => {
+    calls.push([name, params])
+    return Promise.resolve().then(() => (behaviour[name] ? behaviour[name](params) : fallback))
+  }
+  const tg = {
+    banChatMember: make('ban', { id: 31 }),
+    unbanChatMember: make('unban', undefined),
+    restrictChatMember: make('restrict', undefined),
+    editAdminRights: make('rights', undefined)
+  } as unknown as TelegramClient
+  return { tg, calls }
+}
+
+const DAY = 24 * 60 * 60 * 1000
+
+test('eval-150 ban and unban reach Telegram once per person, and the log names each person', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const { tg, calls } = memberClient()
+    const until = Date.now() + 3 * DAY
+
+    const forever = await banMembers(tg, CHAT, [11, '12', 11], YES)
+    assert.deepEqual(forever, { done: [11, 12], failed: [] }, 'a duplicate is one person, not two attempts')
+    // Forever is the ABSENCE of untilDate, not a zero or a far date.
+    assert.deepEqual(calls[0], ['ban', { chatId: CHAT, participantId: 11 }])
+    assert.deepEqual(calls[1], ['ban', { chatId: CHAT, participantId: 12 }])
+
+    await banMembers(tg, CHAT, [13], { ...YES, until })
+    assert.deepEqual(calls[2], ['ban', { chatId: CHAT, participantId: 13, untilDate: until }])
+
+    const lifted = await unbanMembers(tg, CHAT, [11, 12], YES)
+    assert.deepEqual(lifted, { done: [11, 12], failed: [] })
+    assert.deepEqual(calls[3], ['unban', { chatId: CHAT, participantId: 11 }])
+    assert.equal(calls.length, 5)
+
+    const log = readSendLog()
+    assert.deepEqual(
+      log.map((r) => [r.kind, r.peerId, r.targetUserId]),
+      [
+        ['ban-member', CHAT, 11], ['ban-member', CHAT, 12], ['ban-member', CHAT, 13],
+        ['unban-member', CHAT, 11], ['unban-member', CHAT, 12]
+      ],
+      'one audit line per person, naming the person and not only the chat'
+    )
+    assert.ok(log.every((r) => r.ok && r.size === 0 && r.units === 0), 'zero cap units, recorded')
+    assert.equal(log[0]?.detail, 'until=forever')
+    assert.equal(log[2]?.detail, `until=${new Date(until).toISOString()}`)
+    assert.equal(log[0]?.messageId, 31, 'the service message id Telegram returned is what the record reports')
+    assert.equal(log[3]?.messageId, 0, 'an unban has no message')
+    assert.equal(sendsToday(log), 0, 'moderation costs no send budget')
+  })
+})
+
+test('eval-151 a batch stops at a wall, never retries, and exits with the first refusal', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const outcomes: Record<number, () => unknown> = {
+      1: () => ({ id: 1 }),
+      2: () => { throw rpc('USER_ADMIN_INVALID') },
+      3: () => { throw rpc('USER_NOT_PARTICIPANT') },
+      4: () => { throw rpc('FLOOD_WAIT_30', 420) },
+      5: () => ({ id: 5 }),
+      6: () => ({ id: 6 })
+    }
+    const { tg, calls } = memberClient({
+      ban: (p) => outcomes[(p as { participantId: number }).participantId]!()
+    })
+
+    const result = await banMembers(tg, CHAT, [1, 2, 3, 4, 5, 6], YES)
+    assert.deepEqual(calls.map(([, p]) => (p as { participantId: number }).participantId), [1, 2, 3, 4],
+      'a refusal about one person goes on; a flood stops the batch and nothing is retried')
+    assert.deepEqual(result.done, [1])
+    assert.deepEqual(result.failed.map((f) => [f.user, f.reason, f.exit]), [
+      [2, 'target_is_admin', EXIT.needsHuman],
+      [3, 'not_member', EXIT.usage],
+      [4, 'flood', EXIT.upstream],
+      [5, 'skipped', EXIT.upstream],
+      [6, 'skipped', EXIT.upstream]
+    ])
+    assert.equal(memberBatchExit(result), EXIT.needsHuman, 'the code of the FIRST refusal')
+    assert.equal(memberBatchExit({ done: [1], failed: [] }), EXIT.ok)
+    assert.equal(
+      readSendLog().map((r) => r.ok).join(','), 'true,false,false,false',
+      'only attempts are logged; a skipped person was never tried'
+    )
+    assert.equal(sendsToday(readSendLog()), 0)
+  })
+
+  await withTempDir(async () => {
+    resetRunCounter()
+    const { tg, calls } = memberClient({ unban: () => { throw rpc('CHAT_ADMIN_REQUIRED', 403) } })
+    const result = await unbanMembers(tg, CHAT, [1, 2, 3], YES)
+    assert.equal(calls.length, 1, 'no rights means every next person would fail the same way')
+    assert.deepEqual(result.failed.map((f) => f.reason), ['not_admin', 'skipped', 'skipped'])
+    assert.equal(memberBatchExit(result), EXIT.needsHuman)
+  })
+
+  await withTempDir(async () => {
+    resetRunCounter()
+    const { tg } = memberClient({ ban: () => { throw new Error('socket hang up') } })
+    const result = await banMembers(tg, CHAT, [1], YES)
+    assert.equal(result.failed[0]?.reason, 'other')
+    assert.equal(result.failed[0]?.message, 'socket hang up')
+    assert.equal(memberBatchExit(result), EXIT.bug, 'an unknown failure stays a bug')
+  })
+})
+
+test('eval-152 Telegram refusals about a person map to stable reasons and the repo exit codes', () => {
+  const cases: [string, number, string, number][] = [
+    ['CHAT_ADMIN_REQUIRED', 400, 'not_admin', EXIT.needsHuman],
+    ['RIGHT_FORBIDDEN', 403, 'not_admin', EXIT.needsHuman],
+    ['USER_ADMIN_INVALID', 400, 'target_is_admin', EXIT.needsHuman],
+    ['USER_CREATOR', 400, 'target_is_creator', EXIT.usage],
+    ['USER_NOT_PARTICIPANT', 400, 'not_member', EXIT.usage],
+    ['USER_ID_INVALID', 400, 'invalid_user', EXIT.usage],
+    ['PARTICIPANT_ID_INVALID', 400, 'invalid_user', EXIT.usage],
+    ['CHANNEL_INVALID', 400, 'invalid_chat', EXIT.usage],
+    ['CHANNEL_PRIVATE', 400, 'invalid_chat', EXIT.usage],
+    ['ADMINS_TOO_MUCH', 400, 'too_many_admins', EXIT.needsHuman],
+    ['ADMIN_RANK_INVALID', 400, 'invalid_rank', EXIT.usage],
+    ['ADMIN_RANK_EMOJI_NOT_ALLOWED', 400, 'invalid_rank', EXIT.usage],
+    ['FLOOD_WAIT_12', 420, 'flood', EXIT.upstream],
+    ['PEER_FLOOD', 400, 'flood', EXIT.upstream]
+  ]
+  for (const [text, code, reason, exit] of cases) {
+    const known = classifyMemberFailure(rpc(text, code))
+    assert.equal(known.reason, reason, text)
+    assert.equal(known.exit, exit, text)
+  }
+  assert.equal(classifyMemberFailure(rpc('FLOOD_WAIT_12', 420)).stop, true)
+  assert.equal(classifyMemberFailure(rpc('CHAT_ADMIN_REQUIRED')).stop, true)
+  assert.equal(classifyMemberFailure(rpc('USER_ADMIN_INVALID')).stop, false, 'one person\'s refusal is theirs alone')
+
+  const unknown = classifyMemberFailure(new Error('boom'))
+  assert.equal(unknown.reason, 'other')
+  assert.equal(unknown.exit, EXIT.bug)
+})
+
+test('eval-153 restrict passes Telegram\'s own restriction sense through, and refuses what is not one', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const { tg, calls } = memberClient()
+    const until = Date.now() + 2 * DAY
+
+    const record = await restrictMember(tg, CHAT, 42, 'send-media, send-polls,send-media', { ...YES, until })
+    // true means DISALLOWED, exactly as chatBannedRights spells it; nothing is set to false.
+    assert.deepEqual(calls[0], ['restrict', {
+      chatId: CHAT, userId: 42, restrictions: { sendMedia: true, sendPolls: true }, until
+    }])
+    assert.equal(record.kind, 'restrict-member')
+    assert.equal(record.targetUserId, 42)
+    assert.equal(record.detail, `deny=send-media,send-polls until=${new Date(until).toISOString()}`)
+
+    await restrictMember(tg, CHAT, 42, ['send-messages'], YES)
+    assert.deepEqual(calls[1], ['restrict', { chatId: CHAT, userId: 42, restrictions: { sendMessages: true } }])
+
+    const usage = (e: unknown) => e instanceof OperatorError && e.exitCode === EXIT.usage
+    await assert.rejects(() => restrictMember(tg, CHAT, 42, '', YES), (e: unknown) =>
+      usage(e) && /tg group unban/.test((e as Error).message))
+    // view-messages is a ban in disguise; it has its own verb and prompt.
+    await assert.rejects(() => restrictMember(tg, CHAT, 42, 'view-messages', YES), (e: unknown) =>
+      usage(e) && /tg group ban/.test((e as Error).message))
+    for (const bad of ['nope', '__proto__', 'constructor', 'toString', 'sendMessages']) {
+      await assert.rejects(() => restrictMember(tg, CHAT, 42, bad, YES), usage, bad)
+    }
+    // An end date Telegram would read as FOREVER is refused rather than passed on.
+    for (const bad of [Date.now() + 5_000, Date.now() + 400 * DAY, Number.NaN]) {
+      await assert.rejects(() => restrictMember(tg, CHAT, 42, 'send-media', { ...YES, until: bad }), usage, String(bad))
+    }
+
+    assert.equal(calls.length, 2, 'every refusal happened before the network')
+    assert.equal(readSendLog().length, 2, 'a refused argument is not an attempt')
+  })
+})
+
+test('eval-154 the restriction and admin-right vocabularies cover Telegram\'s flags exactly', () => {
+  // Hard-coded from tl.RawChatBannedRights / tl.RawChatAdminRights in the pinned
+  // @mtcute/tl. If mtcute adds a flag this fails, which is the point: a right
+  // nobody can name is a right nobody can take away or grant on purpose.
+  const bannedFields = [
+    'viewMessages', 'sendMessages', 'sendMedia', 'sendStickers', 'sendGifs', 'sendGames', 'sendInline',
+    'embedLinks', 'sendPolls', 'changeInfo', 'inviteUsers', 'pinMessages', 'manageTopics', 'sendPhotos',
+    'sendVideos', 'sendRoundvideos', 'sendAudios', 'sendVoices', 'sendDocs', 'sendPlain'
+  ]
+  assert.deepEqual([...Object.values(RESTRICTIONS), 'viewMessages'].sort(), [...bannedFields].sort())
+
+  const adminFields = [
+    'changeInfo', 'postMessages', 'editMessages', 'deleteMessages', 'banUsers', 'inviteUsers', 'pinMessages',
+    'addAdmins', 'anonymous', 'manageCall', 'other', 'manageTopics', 'postStories', 'editStories',
+    'deleteStories', 'manageDirectMessages'
+  ]
+  assert.deepEqual([...Object.values(ADMIN_RIGHTS)].sort(), [...adminFields].sort())
+})
+
+test('eval-155 promote grants exactly the rights named, and demote is empty rights', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const { tg, calls } = memberClient()
+
+    const promoted = await promoteAdmin(tg, CHAT, 42, 'delete-messages, ban-users,pin-messages', { ...YES, rank: ' Mod ' })
+    assert.deepEqual(calls[0], ['rights', {
+      chatId: CHAT, userId: 42,
+      rights: { deleteMessages: true, banUsers: true, pinMessages: true },
+      rank: 'Mod'
+    }])
+    assert.equal(promoted.kind, 'promote-admin')
+    assert.equal(promoted.targetUserId, 42)
+    assert.equal(promoted.detail, 'rights=delete-messages,ban-users,pin-messages rank="Mod"')
+
+    await promoteAdmin(tg, CHAT, 42, ['other'], YES)
+    assert.deepEqual(calls[1], ['rights', { chatId: CHAT, userId: 42, rights: { other: true } }], 'no rank key unless one was given')
+
+    const demoted = await demoteAdmin(tg, CHAT, 42, YES)
+    assert.deepEqual(calls[2], ['rights', { chatId: CHAT, userId: 42, rights: {} }])
+    assert.equal(demoted.kind, 'demote-admin')
+    assert.equal(demoted.detail, 'rights=none')
+
+    const log = readSendLog()
+    assert.deepEqual(log.map((r) => r.kind), ['promote-admin', 'promote-admin', 'demote-admin'])
+    assert.equal(sendsToday(log), 0, 'admin rights cost no send budget')
+  })
+})
+
+test('eval-156 promote refuses "all rights", ownership and anything it cannot name, before the network', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const { tg, calls } = memberClient()
+    const usage = (e: unknown) => e instanceof OperatorError && e.exitCode === EXIT.usage
+
+    for (const sweeping of ['all', 'ALL', '*', 'everything', 'full', 'owner', 'creator', 'founder', 'transfer', 'ban-users,all']) {
+      await assert.rejects(() => promoteAdmin(tg, CHAT, 42, sweeping, YES), (e: unknown) =>
+        usage(e) && /no "all"/.test((e as Error).message), sweeping)
+    }
+    // Every right spelled out is the same grant as "all".
+    const everyRight = Object.keys(ADMIN_RIGHTS).join(',')
+    await assert.rejects(() => promoteAdmin(tg, CHAT, 42, everyRight, YES), (e: unknown) =>
+      usage(e) && /all-rights grant/.test((e as Error).message))
+    // ...but all but one is an explicit choice, and goes through.
+    const allButOne = Object.keys(ADMIN_RIGHTS).filter((name) => name !== 'add-admins')
+    assert.doesNotThrow(() => parseAdminRightNames(allButOne))
+
+    for (const bad of ['', ' , ', 'nope', '__proto__', 'constructor', 'deleteMessages']) {
+      await assert.rejects(() => promoteAdmin(tg, CHAT, 42, bad, YES), usage, JSON.stringify(bad))
+    }
+    for (const rank of ['', '   ', 'x'.repeat(17), 'bad\ntitle']) {
+      await assert.rejects(() => promoteAdmin(tg, CHAT, 42, 'other', { ...YES, rank }), usage, JSON.stringify(rank))
+    }
+    await promoteAdmin(tg, CHAT, 42, 'other', { ...YES, rank: 'x'.repeat(16) })
+
+    assert.equal(calls.length, 1, 'only the final, valid call reached Telegram')
+    assert.equal(readSendLog().length, 1)
+  })
+})
+
+test('eval-157 single-person verbs map Telegram refusals to exit codes and keep unknown ones as bugs', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const failing = (text: string, code = 400) => memberClient({
+      restrict: () => { throw rpc(text, code) },
+      rights: () => { throw rpc(text, code) }
+    }).tg
+    const exits: [string, number][] = [
+      ['CHAT_ADMIN_REQUIRED', EXIT.needsHuman],
+      ['USER_ADMIN_INVALID', EXIT.needsHuman],
+      ['ADMINS_TOO_MUCH', EXIT.needsHuman],
+      ['USER_CREATOR', EXIT.usage],
+      ['USER_NOT_PARTICIPANT', EXIT.usage],
+      ['ADMIN_RANK_INVALID', EXIT.usage],
+      ['FLOOD_WAIT_9', EXIT.upstream]
+    ]
+    for (const [text, exit] of exits) {
+      const tg = failing(text, text.startsWith('FLOOD') ? 420 : 400)
+      for (const run of [
+        () => restrictMember(tg, CHAT, 42, 'send-media', YES),
+        () => promoteAdmin(tg, CHAT, 42, 'other', YES),
+        () => demoteAdmin(tg, CHAT, 42, YES)
+      ]) {
+        await assert.rejects(run, (e: unknown) => e instanceof OperatorError && e.exitCode === exit, text)
+      }
+    }
+
+    const boom = new Error('boom')
+    const tg = memberClient({ rights: () => { throw boom } }).tg
+    await assert.rejects(() => demoteAdmin(tg, CHAT, 42, YES), (e: unknown) => e === boom, 'unknown stays a bug with its stack')
+
+    const log = readSendLog()
+    assert.equal(log.length, 7 * 3 + 1, 'a refused attempt is still on the record')
+    assert.ok(log.every((r) => !r.ok && typeof r.error === 'string'))
+  })
+})
+
+test('eval-158 moderation verbs take people as positive numeric ids, and only supergroups or channels', async () => {
+  await withTempDir(async () => {
+    resetRunCounter()
+    const { tg, calls } = memberClient()
+    const usage = (e: unknown) => e instanceof OperatorError && e.exitCode === EXIT.usage
+    const LEGACY = -4242424242
+    const PRIVATE_CHAT = 4242424242
+
+    // Handles are refused: @durov and @durvo are different real people.
+    await assert.rejects(() => banMembers(tg, CHAT, ['@durov'], YES), /Not a numeric peer id/)
+    await assert.rejects(() => unbanMembers(tg, CHAT, ['durov'], YES), /Not a numeric peer id/)
+    await assert.rejects(() => restrictMember(tg, CHAT, '@durov', 'send-media', YES), /Not a numeric peer id/)
+    await assert.rejects(() => promoteAdmin(tg, CHAT, '@durov', 'other', YES), /Not a numeric peer id/)
+    await assert.rejects(() => demoteAdmin(tg, CHAT, '@durov', YES), /Not a numeric peer id/)
+    await assert.rejects(() => banMembers(tg, '@somechat', [1], YES), /Not a numeric peer id/)
+
+    // A chat or channel id is never somebody to ban or promote.
+    for (const run of [
+      () => banMembers(tg, CHAT, [-1009999999999], YES),
+      () => unbanMembers(tg, CHAT, [-5], YES),
+      () => restrictMember(tg, CHAT, -5, 'send-media', YES),
+      () => promoteAdmin(tg, CHAT, -5, 'other', YES),
+      () => demoteAdmin(tg, CHAT, -5, YES)
+    ]) {
+      await assert.rejects(run, (e: unknown) => usage(e) && /not a person/.test((e as Error).message))
+    }
+
+    // A legacy group or a private chat has no ban, restriction or admin rights.
+    for (const chat of [LEGACY, PRIVATE_CHAT]) {
+      for (const run of [
+        () => banMembers(tg, chat, [1], YES),
+        () => unbanMembers(tg, chat, [1], YES),
+        () => restrictMember(tg, chat, 1, 'send-media', YES),
+        () => promoteAdmin(tg, chat, 1, 'other', YES),
+        () => demoteAdmin(tg, chat, 1, YES)
+      ]) {
+        await assert.rejects(run, (e: unknown) => usage(e) && /supergroup or channel/.test((e as Error).message))
+      }
+    }
+    await assert.rejects(() => banMembers(tg, LEGACY, [1], YES), /kick-member/, 'a legacy group points at the verb that exists')
+
+    // The per-call cap, before any network.
+    const ids = Array.from({ length: 21 }, (_, i) => i + 1)
+    await assert.rejects(() => banMembers(tg, CHAT, ids, YES), (e: unknown) => usage(e) && /at most 20/.test((e as Error).message))
+    await assert.rejects(() => unbanMembers(tg, CHAT, ids, YES), /at most 20/)
+    await assert.rejects(() => banMembers(tg, CHAT, [], YES), /at least one/)
+    await banMembers(tg, CHAT, ids.slice(0, 20), YES)
+
+    assert.equal(calls.length, 20, 'only the final, valid batch reached Telegram')
+    assert.equal(readSendLog().length, 20)
+  })
+})
+
+test('eval-159 without --yes and without a terminal, every moderation verb refuses with exit 3', async () => {
+  const original = process.env.TG_NON_INTERACTIVE
+  process.env.TG_NON_INTERACTIVE = '1'
+  try {
+    // No methods at all: if a verb got past the gate it would throw a TypeError, not exit 3.
+    const tg = {} as unknown as TelegramClient
+    const needsHuman = (e: unknown) => e instanceof OperatorError && e.exitCode === EXIT.needsHuman
+    await assert.rejects(() => banMembers(tg, CHAT, [1], {}), needsHuman)
+    await assert.rejects(() => unbanMembers(tg, CHAT, [1], {}), needsHuman)
+    await assert.rejects(() => restrictMember(tg, CHAT, 1, 'send-media', {}), needsHuman)
+    await assert.rejects(() => promoteAdmin(tg, CHAT, 1, 'other', {}), needsHuman)
+    await assert.rejects(() => demoteAdmin(tg, CHAT, 1, {}), needsHuman)
+  } finally {
+    if (original === undefined) delete process.env.TG_NON_INTERACTIVE
+    else process.env.TG_NON_INTERACTIVE = original
+  }
+})
+
+test('eval-160 members lists id, name, handle and role, and reads without any write method', async () => {
+  const seen: unknown[] = []
+  const tg = {
+    getChatMembers: (chat: number, params: unknown) => {
+      seen.push([chat, params])
+      return Promise.resolve([
+        {
+          user: { id: 1, displayName: 'Ada L', username: 'ada' },
+          status: 'creator', title: null, joinedDate: null,
+          permissions: { _: 'chatAdminRights', changeInfo: true, banUsers: true, addAdmins: true, anonymous: false }
+        },
+        {
+          user: { id: 2, displayName: 'Bo', username: null },
+          status: 'admin', title: 'Mod', joinedDate: new Date('2026-08-01T10:00:00Z'),
+          permissions: { _: 'chatAdminRights', deleteMessages: true, pinMessages: true }
+        },
+        {
+          user: { id: 3, displayName: 'Cy', username: 'cy' },
+          status: 'member', title: null, joinedDate: new Date('2026-09-02T08:30:00Z'), permissions: null
+        },
+        {
+          user: { id: 4, displayName: 'Di', username: null },
+          status: 'banned', title: null, joinedDate: null, permissions: null
+        }
+      ])
+    }
+  } as unknown as TelegramClient
+
+  const rows = await listChatMembers(tg, CHAT, { limit: 50, type: 'admins', query: 'a' })
+  assert.deepEqual(seen[0], [CHAT, { limit: 50, type: 'admins', query: 'a' }])
+  assert.deepEqual(rows, [
+    { userId: 1, name: 'Ada L', username: 'ada', status: 'creator', rank: '', rights: ['change-info', 'ban-users', 'add-admins'], joined: '' },
+    { userId: 2, name: 'Bo', username: null, status: 'admin', rank: 'Mod', rights: ['delete-messages', 'pin-messages'], joined: '2026-08-01T10:00' },
+    { userId: 3, name: 'Cy', username: 'cy', status: 'member', rank: '', rights: [], joined: '2026-09-02T08:30' },
+    { userId: 4, name: 'Di', username: null, status: 'banned', rank: '', rights: [], joined: '' }
+  ])
+
+  // No option given means no key sent: an omitted limit must not become limit 0.
+  await listChatMembers(tg, CHAT)
+  assert.deepEqual(seen[1], [CHAT, {}])
+
+  assert.equal(
+    renderChatMembers(rows),
+    '           1  Ada L (@ada)  creator  rights change-info,ban-users,add-admins\n' +
+    '           2  Bo  admin  "Mod" rights delete-messages,pin-messages joined 2026-08-01T10:00\n' +
+    '           3  Cy (@cy)  member  joined 2026-09-02T08:30\n' +
+    '           4  Di  banned\n'
+  )
+  assert.equal(renderChatMembers([]), 'no members\n')
+})
+
+test('eval-161 the moderation verbs name every person in the prompt and pass only resolved ids on', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/cli/commands/group.ts', import.meta.url)),
+    'utf-8'
+  )
+
+  // The five D13e writes, each handed the RESOLVED chat id and the parsed
+  // person ids - never the raw typed reference (eval-65's rule, for these).
+  const calls = [...source.matchAll(/\b(banMembers|unbanMembers|restrictMember|promoteAdmin|demoteAdmin)\(tg,\s*([\w.]+),\s*(\w+)/g)]
+  assert.deepEqual(calls.map((m) => m[1]).sort(), ['banMembers', 'demoteAdmin', 'promoteAdmin', 'restrictMember', 'unbanMembers'])
+  for (const call of calls) {
+    assert.equal(call[2], 'target.id', `${call[1]!} must receive the resolved chat id`)
+    assert.ok(/^(userId|userIds)$/.test(call[3]!), `${call[1]!} must receive parsed person ids`)
+  }
+
+  // Every one of them shows the PEOPLE, by name, handle and id, before acting.
+  assert.equal([...source.matchAll(/confirmPeople\(target,/g)].length, 5)
+  assert.equal([...source.matchAll(/await describePeople\(tg, userIds\)/g)].length, 2, 'the batch verbs resolve every person')
+  // restrict, promote and demote resolve their one person (kick-member does too).
+  assert.ok([...source.matchAll(/describePeer\(await resolvePeerRef\(tg, String\(userId\)\)\)/g)].length >= 4)
+
+  // People are numeric ids, parsed once, in one place.
+  assert.ok(source.includes('parsePersonId('))
+  assert.ok(!/parsePeerRef\(user\b/.test(source), 'a person is never parsed as a chat reference')
+})
+
+test('eval-162 the moderation verbs work through the real CLI: usage and gate refusals exit with the contract codes', async () => {
+  const entry = fileURLToPath(new URL('../src/index.ts', import.meta.url))
+  const tsx = fileURLToPath(new URL('../node_modules/tsx/dist/esm/index.mjs', import.meta.url))
+
+  await withTempDir(async () => {
+    const run = (args: string[]) => new Promise<{ code: number | null; stdout: string }>((done) => {
+      execFile(
+        process.execPath,
+        ['--import', tsx, entry, ...args],
+        { env: { ...process.env, TG_NON_INTERACTIVE: '1', TG_NO_UPDATE: '1' }, cwd: process.cwd() },
+        (error, stdout) => done({ code: error ? (error as { code?: number }).code ?? 1 : 0, stdout })
+      )
+    })
+
+    const chat = String(CHAT)
+    const cases: [string[], number, RegExp][] = [
+      // The gate fires first, before any session is looked for.
+      [['group', 'ban', chat, '42'], EXIT.needsHuman, /without --yes/],
+      [['group', 'unban', chat, '42'], EXIT.needsHuman, /without --yes/],
+      [['group', 'restrict', chat, '42', '--deny', 'send-media'], EXIT.needsHuman, /without --yes/],
+      [['group', 'promote', chat, '42', '--rights', 'other'], EXIT.needsHuman, /without --yes/],
+      [['group', 'demote', chat, '42'], EXIT.needsHuman, /without --yes/],
+      // Usage errors, offline.
+      [['group', 'ban', chat, '@durov', '--yes'], EXIT.usage, /numeric peer ids/],
+      [['group', 'ban', chat, '-1009999999999', '--yes'], EXIT.usage, /not a person/],
+      [['group', 'ban', chat, '42', '--until', '5', '--yes'], EXIT.usage, /FOREVER/],
+      [['group', 'restrict', chat, '42', '--yes'], EXIT.usage, /at least one restriction/],
+      [['group', 'restrict', chat, '42', '--deny', 'view-messages', '--yes'], EXIT.usage, /tg group ban/],
+      [['group', 'promote', chat, '42', '--rights', 'all', '--yes'], EXIT.usage, /no "all"/],
+      [['group', 'promote', chat, '42', '--yes'], EXIT.usage, /at least one right/],
+      [['group', 'promote', chat, '42', '--rights', 'other', '--rank', 'x'.repeat(17), '--yes'], EXIT.usage, /admin title/]
+    ]
+
+    const results = await Promise.all(cases.map(([args]) => run([...args, '--json'])))
+    results.forEach((result, i) => {
+      const [args, code, message] = cases[i]!
+      assert.equal(result.code, code, `tg ${args.join(' ')} exited ${result.code}`)
+      const envelope = JSON.parse(result.stdout) as { ok: boolean; error: { exit: number; message: string } }
+      assert.equal(envelope.ok, false)
+      assert.equal(envelope.error.exit, code)
+      assert.match(envelope.error.message + JSON.stringify(envelope), message)
+    })
+  })
 })

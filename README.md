@@ -332,6 +332,12 @@ confirmation prompt (or `--yes`), and a line in `data/sent.jsonl`.
 | `group add-members <peer> <ids...>` | add people, numeric ids only, at most 20 per call |
 | `group kick-member <peer> <id>` | remove one person (they may rejoin) |
 | `group delete <peer>` | delete a supergroup or channel you created, irreversible |
+| `group members <peer> [--type ...] [--query ...] [--limit ...]` | list members: id, name, @handle, role, title, admin rights (read-only; Telegram returns at most 200) |
+| `group ban <peer> <ids...> [--until <date>]` | ban people, numeric ids only, at most 20 per call; forever unless `--until` |
+| `group unban <peer> <ids...>` | let them join again and lift any restrictions; does not add them back |
+| `group restrict <peer> <id> --deny <a,b> [--until <date>]` | take abilities away from one member, e.g. `send-messages,send-media` |
+| `group promote <peer> <id> --rights <a,b> [--rank <title>]` | make one person an admin with exactly the rights named |
+| `group demote <peer> <id>` | take every admin right away; they stay a member |
 
 Two of these do not come back:
 
@@ -350,13 +356,62 @@ and exits 0 even when some users could not be added. `reason` is one of
 `privacy`, `not_mutual`, `flood`, `too_many_channels`, `already_member`, `other`.
 A privacy block is not an error to retry: use `group invite-new` and share the
 link. A flood limit stops the batch; the users not yet tried come back as
-`flood`. `delete` refuses unless this account created the chat. Ban, restrict,
-unban and admin rights are still **not** here — see
-`backlog/decisions/2026-08-31-widen-the-fenced-write-verbs-to-group-channel-management.md`
-and `backlog/decisions/2026-10-05-widen-the-fenced-write-verbs-to-membership-and-deletion.md`.
+`flood`. `delete` refuses unless this account created the chat.
 
-Telegram refusals map to readable messages and exit codes: `CHAT_ADMIN_REQUIRED`
-is 3 (a human must grant admin), `CHANNEL_FORUM_MISSING` and `TOPIC_CLOSED` are 2,
+### Moderation and admin rights
+
+`ban`, `unban`, `restrict`, `promote` and `demote` act on a *person*, so they
+are stricter than the rest:
+
+- **People are positive numeric ids**, never `@handles` and never a chat id
+  (`tg peers find <name> --id-only`). The prompt shows each person's name,
+  handle and id, and says what the action does.
+- **Supergroups and channels only.** A legacy group has no ban, restriction or
+  admin rights in Telegram's model, so these refuse it and point at
+  `kick-member`.
+- **One request and one audit line per person.** The line in `data/sent.jsonl`
+  names the person (`targetUserId`) and what was set (`detail`). A flood limit,
+  a missing admin right or an unknown chat stops a batch; nothing is retried or
+  waited on, and the people not reached come back as `skipped`.
+- **`--until`** takes an ISO date between 30 seconds and 366 days ahead.
+  Telegram reads anything else as *forever*, so anything else is refused rather
+  than silently making a short ban permanent. Omit it for forever.
+- **`restrict --deny`** takes a comma-separated list: `send-messages`,
+  `send-plain`, `send-media`, `send-photos`, `send-videos`, `send-round-videos`,
+  `send-audios`, `send-voices`, `send-docs`, `send-stickers`, `send-gifs`,
+  `send-games`, `send-inline`, `send-polls`, `embed-links`, `change-info`,
+  `invite-users`, `pin-messages`, `manage-topics`. Each named ability is taken
+  away. Lift restrictions with `unban`; `view-messages` is a ban, so use `ban`.
+- **`promote --rights`** names every right: `change-info`, `post-messages`,
+  `edit-messages`, `delete-messages`, `ban-users`, `invite-users`,
+  `pin-messages`, `add-admins`, `anonymous`, `manage-call`, `manage-topics`,
+  `post-stories`, `edit-stories`, `delete-stories`, `manage-direct-messages`,
+  `other` (an admin with no named power). There is no `all`, no ownership
+  transfer, and a list naming every right is refused as an all-rights grant.
+  `--rank` is a custom title of 1-16 characters. Promoting replaces the rights
+  the person had; `add-admins` lets them appoint more admins, and the prompt
+  says so.
+
+`ban` and `unban` with `--json` print `{"ok", "banned" | "unbanned": [ids],
+"failed": [{"user", "reason", "message", "exit"}]}`. Unlike `add-members` they
+exit 0 only when every person was done; otherwise they exit with the code of the
+first refusal, after printing that result (with an `error` object alongside).
+Reasons: `flood`, `not_admin`, `target_is_admin`, `target_is_creator`,
+`not_member`, `invalid_user`, `invalid_chat`, `too_many_admins`, `invalid_rank`,
+`skipped`, `other`.
+
+Not here, and not to be added without their own decision record: deleting a
+legacy group, chat migration, message auto-delete (`setChatTtl`) and handing over
+ownership. See
+`backlog/decisions/2026-08-31-widen-the-fenced-write-verbs-to-group-channel-management.md`,
+`backlog/decisions/2026-10-05-widen-the-fenced-write-verbs-to-membership-and-deletion.md`
+and
+`backlog/decisions/2026-10-17-widen-the-fenced-write-verbs-to-moderation-and-admin-rights.md`.
+
+Telegram refusals map to readable messages and exit codes: `CHAT_ADMIN_REQUIRED`,
+`RIGHT_FORBIDDEN`, `USER_ADMIN_INVALID` and `ADMINS_TOO_MUCH` are 3 (a human must
+grant a right or decide), `CHANNEL_FORUM_MISSING`, `TOPIC_CLOSED`,
+`USER_NOT_PARTICIPANT`, `USER_CREATOR` and an unknown user or chat are 2,
 `FLOOD_WAIT` and `PEER_FLOOD` are 6.
 
 ## Sessions

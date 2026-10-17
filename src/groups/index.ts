@@ -1,10 +1,11 @@
 import type { TelegramClient } from '@mtcute/node'
+import { adminRightNames } from './rights.js'
 
 /**
  * The READ half of group/channel administration.
  *
  * Deliberately separate from `src/send/index.ts`: listing invite links, the
- * people who used one, and a forum's topics calls no write RPC, so none of it
+ * people who used one, a chat's members and a forum's topics calls no write RPC, so none of it
  * belongs behind the send fence. Keeping it here means a future read verb can
  * use it without importing the module that can write.
  *
@@ -32,6 +33,23 @@ export interface InviteMemberRow {
   at: string
   pending: boolean
 }
+
+/** One member of a chat. */
+export interface ChatMemberRow {
+  userId: number
+  name: string
+  username: string | null
+  /** creator | admin | member | restricted | banned | left. */
+  status: string
+  /** An admin's custom title, or '' when there is none. */
+  rank: string
+  /** Kebab-case admin rights an admin holds (see `tg group promote`); empty for everyone else. */
+  rights: string[]
+  /** ISO to the minute, or '' when Telegram does not report it. */
+  joined: string
+}
+
+export type ChatMemberType = 'all' | 'banned' | 'restricted' | 'bots' | 'recent' | 'admins' | 'contacts' | 'mention'
 
 /** One forum topic. */
 export interface ForumTopicRow {
@@ -86,6 +104,41 @@ export async function listInviteLinkMembers(
   }))
 }
 
+/**
+ * Members of a chat: who is in it, and in what role.
+ *
+ * A READ, so it lives here and not in `src/send/`: it needs no gate and no
+ * budget, and the import graph keeps it that way (eval-31 walks this file).
+ * Telegram returns at most 200 members whatever offset or limit is asked for;
+ * that is the server's rule, not one invented here. `type` filters only apply to
+ * supergroups and channels.
+ */
+export async function listChatMembers(
+  tg: TelegramClient,
+  chatId: number,
+  options: {
+    limit?: number | undefined
+    type?: ChatMemberType | undefined
+    query?: string | undefined
+  } = {}
+): Promise<ChatMemberRow[]> {
+  const members = await tg.getChatMembers(chatId, {
+    ...(options.limit === undefined ? {} : { limit: options.limit }),
+    ...(options.type === undefined ? {} : { type: options.type }),
+    ...(options.query === undefined ? {} : { query: options.query })
+  })
+
+  return [...members].map((member) => ({
+    userId: member.user.id,
+    name: member.user.displayName,
+    username: member.user.username ?? null,
+    status: member.status,
+    rank: member.title ?? '',
+    rights: member.status === 'admin' || member.status === 'creator' ? adminRightNames(member.permissions) : [],
+    joined: minute(member.joinedDate)
+  }))
+}
+
 /** Topics in a forum supergroup. */
 export async function listForumTopics(
   tg: TelegramClient,
@@ -135,6 +188,24 @@ export function renderInviteMembers(rows: InviteMemberRow[]): string {
 
   return `${rows
     .map((row) => `${row.at}  ${row.userId}  ${row.name}${flags([[row.pending, 'pending']])}`)
+    .join('\n')}\n`
+}
+
+export function renderChatMembers(rows: ChatMemberRow[]): string {
+  if (rows.length === 0) return 'no members\n'
+
+  return `${rows
+    .map((row) => {
+      const handle = row.username ? ` (@${row.username})` : ''
+      return (
+        `${String(row.userId).padStart(12)}  ${row.name}${handle}  ${row.status}` +
+        flags([
+          [Boolean(row.rank), `"${row.rank}"`],
+          [row.rights.length > 0, `rights ${row.rights.join(',')}`],
+          [Boolean(row.joined), `joined ${row.joined}`]
+        ])
+      )
+    })
     .join('\n')}\n`
 }
 

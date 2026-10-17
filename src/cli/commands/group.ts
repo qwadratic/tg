@@ -1,19 +1,29 @@
 import { confirm, isCancel } from '@clack/prompts'
 import chalk from 'chalk'
 import type { Command } from 'commander'
+import type { TelegramClient } from '@mtcute/node'
 import {
   addChatMembers,
+  assertUntil,
+  banMembers,
   createChannel,
   createForumTopic,
   createGroup,
   createInviteLink,
   createSupergroup,
   deleteChat,
+  demoteAdmin,
   editForumTopic,
   editInviteLink,
   exportInviteLink,
   kickChatMember,
   MAX_MEMBERS_PER_CALL,
+  memberBatchExit,
+  parseAdminRightNames,
+  parseRank,
+  parseRestrictionNames,
+  promoteAdmin,
+  restrictMember,
   setChatColor,
   setChatDescription,
   setChatPhoto,
@@ -26,16 +36,21 @@ import {
   setJoinRequests,
   setJoinToSend,
   setSlowMode,
+  unbanMembers,
+  type MemberBatchResult,
   type SentRecord
 } from '../../send/index.js'
 import { assertConfirmed } from '../../send/gate.js'
 import {
+  listChatMembers,
   listForumTopics,
   listInviteLinkMembers,
   listInviteLinks,
+  renderChatMembers,
   renderForumTopics,
   renderInviteLinks,
-  renderInviteMembers
+  renderInviteMembers,
+  type ChatMemberType
 } from '../../groups/index.js'
 import { describePeer, parsePeerRef, resolvePeerRef, type ResolvedPeer } from '../../peers/ref.js'
 import { runCommand } from '../errors.js'
@@ -56,6 +71,9 @@ import { withAuthenticatedClient } from './shared.js'
  *
  * D13d (backlog/decisions/2026-10-05-...) added add-members, kick-member and
  * delete: they act on a person or destroy a chat, so their prompts name them.
+ * D13e (backlog/decisions/2026-10-17-...) added ban, unban, restrict, promote
+ * and demote, and the read-only `members`; the prompts name the person by
+ * name, handle and id, and people are numeric ids only.
  *
  * The write verbs share the send machinery exactly: numeric peer id, the --yes
  * gate before any session is opened, the audit log. They cost zero cap units,
@@ -136,6 +154,116 @@ function parseUserId(raw: string): number {
     )
   }
   return ref.value
+}
+
+/** A PERSON to act on: a positive numeric id. A negative one is a chat, never somebody to ban or promote. */
+function parsePersonId(raw: string): number {
+  const id = parseUserId(raw)
+  if (id < 0) {
+    throw new OperatorError(
+      `${raw} is a chat or channel id, not a person. Find a user's id with: tg peers find <name> --id-only`,
+      EXIT.usage
+    )
+  }
+  return id
+}
+
+/** Several people: numeric ids only, de-duplicated, refused above the per-call cap before any network. */
+function parsePeople(raw: string[]): number[] {
+  if (raw.length > MAX_MEMBERS_PER_CALL) {
+    throw new OperatorError(`Too many users (${raw.length}). At most ${MAX_MEMBERS_PER_CALL} per call.`, EXIT.usage)
+  }
+  return [...new Set(raw.map((id) => parsePersonId(id)))]
+}
+
+/** Each person resolved to name, handle and id, so a prompt can show WHO and not a number. */
+async function describePeople(tg: TelegramClient, ids: number[]): Promise<string[]> {
+  const people: string[] = []
+  for (const id of ids) people.push(describePeer(await resolvePeerRef(tg, String(id))))
+  return people
+}
+
+/**
+ * Name every person an action is about to hit, and require a yes (D13e).
+ *
+ * The confirmation is the primary guard, as it is for `tg send`: it shows the
+ * resolved identity of the chat AND of each person - display name, @handle and
+ * numeric id - and says plainly what the action does, before anything happens.
+ */
+async function confirmPeople(
+  target: ResolvedPeer,
+  what: string,
+  people: string[],
+  yes: boolean,
+  notes: string[] = []
+): Promise<boolean> {
+  if (yes || !canPrompt()) return true
+
+  console.log(chalk.yellow(`\nAbout to ${what}`))
+  console.log(chalk.yellow(`  chat: ${chalk.bold(describePeer(target))}`))
+  if (target.ref.kind === 'username') {
+    console.log(chalk.dim(`  resolved from ${target.ref.raw} - check the chat is the one you meant`))
+  }
+  for (const person of people) console.log(chalk.yellow(`  person: ${chalk.bold(person)}`))
+  for (const note of notes) console.log(chalk.yellow(`  ${note}`))
+
+  const ok = await confirm({ message: 'Go ahead?' })
+  if (isCancel(ok) || !ok) {
+    console.log('Cancelled. Nothing was done.')
+    return false
+  }
+  return true
+}
+
+/**
+ * An optional ISO date as UNIX ms, refused unless Telegram will honour it.
+ *
+ * Telegram reads an end date under ~30 seconds ahead or over 366 days out as
+ * FOREVER. `Date.parse` turns `5` into the year 2001, so a bare parse would turn
+ * "a short ban" into a permanent one without a word. The window itself is
+ * `assertUntil`'s, the same check the send module applies.
+ */
+function parseUntil(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined
+  const at = Date.parse(raw)
+  if (Number.isNaN(at)) {
+    throw new OperatorError(`Not a date: ${raw}. Use an ISO date, e.g. 2026-12-31.`, EXIT.usage)
+  }
+  return assertUntil(at)
+}
+
+const untilNote = (until: number | undefined): string =>
+  until === undefined ? 'until: FOREVER (until somebody lifts it)' : `until: ${new Date(until).toISOString()}`
+
+/**
+ * Print a ban/unban batch and say how the process should exit.
+ *
+ * Unlike `add-members`, where a privacy refusal is routine, a refusal in a
+ * moderation action never is: exit 0 means everything was done, and anything
+ * else is the code of the first refusal. The per-person result is printed
+ * either way, so a caller that exits non-zero still learns who was done.
+ */
+function reportBatch(
+  key: 'banned' | 'unbanned',
+  result: MemberBatchResult,
+  total: number,
+  chatId: number,
+  json: boolean
+): number {
+  const exit = memberBatchExit(result)
+  if (json) {
+    const name = Object.entries(EXIT).find(([, code]) => code === exit)?.[0] ?? 'bug'
+    process.stdout.write(`${JSON.stringify({
+      ok: exit === 0,
+      [key]: result.done,
+      failed: result.failed,
+      ...(exit === 0 ? {} : { error: { code: name, exit, message: result.failed[0]?.message } })
+    }, null, 2)}\n`)
+    return exit
+  }
+  logSummary(`${key} ${result.done.length} of ${total} in ${chatId}`)
+  for (const f of result.failed) console.error(`  not ${key} ${f.user} (${f.reason}): ${f.message}`)
+  return exit
 }
 
 function report(record: SentRecord, done: string, json = false): void {
@@ -825,6 +953,174 @@ export function registerGroupCommand(program: Command): void {
           report(
             await kickChatMember(tg, target.id, userId, { yes: options.yes }),
             `removed ${userId} from ${target.id}`,
+            Boolean(options.json)
+          )
+        })
+      })
+    })
+
+  /* ------------------------------------------- moderation, admin rights (D13e) */
+
+  group
+    .command('members <peer>')
+    .description("List a chat's members with id, name, @handle and role (read-only; Telegram returns at most 200)")
+    .option('--type <type>', 'all, banned, restricted, bots, recent, admins, contacts or mention (supergroups and channels only)')
+    .option('--query <text>', 'Only members whose name or @username matches')
+    .option('--limit <n>', 'How many to fetch (Telegram caps it at 200)')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, options: { type?: string; query?: string; limit?: string; json?: boolean }) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        const limit = options.limit === undefined ? undefined : parseCount(options.limit, 'limit')
+        const types = ['all', 'banned', 'restricted', 'bots', 'recent', 'admins', 'contacts', 'mention']
+        if (options.type !== undefined && !types.includes(options.type)) {
+          throw new OperatorError(`Not a member type: ${options.type}. One of: ${types.join(', ')}`, EXIT.usage)
+        }
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          const rows = await listChatMembers(tg, target.id, {
+            limit,
+            query: options.query,
+            type: options.type as ChatMemberType | undefined
+          })
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`)
+            return
+          }
+          process.stdout.write(renderChatMembers(rows))
+        })
+      })
+    })
+
+  group
+    .command('ban <peer> <users...>')
+    .description(`Ban people from a supergroup or channel (numeric user ids, at most ${MAX_MEMBERS_PER_CALL}); they cannot rejoin until unbanned`)
+    .option('--until <date>', 'ISO date when the ban lifts (30 seconds to 366 days ahead); omit for forever')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, users: string[], options: GroupFlags & { until?: string }) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        const userIds = parsePeople(users)
+        const until = parseUntil(options.until)
+        const exit = await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          const people = await describePeople(tg, userIds)
+          const notes = [
+            'they cannot rejoin by themselves until somebody unbans them',
+            'everyone in the chat can see the removal; an unban does not undo that',
+            untilNote(until)
+          ]
+          if (!(await confirmPeople(target, `BAN ${people.length} person(s)`, people, Boolean(options.yes), notes))) return 0
+          const result = await banMembers(tg, target.id, userIds, { until, yes: options.yes })
+          return reportBatch('banned', result, userIds.length, target.id, Boolean(options.json))
+        })
+        if (exit !== 0) process.exit(exit)
+      })
+    })
+
+  group
+    .command('unban <peer> <users...>')
+    .description(`Lift a ban or restrictions (numeric user ids, at most ${MAX_MEMBERS_PER_CALL}); they may join again, they are not added back`)
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, users: string[], options: GroupFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        const userIds = parsePeople(users)
+        const exit = await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          const people = await describePeople(tg, userIds)
+          const notes = ['lets them join again and lifts any restrictions; it does not add them back']
+          if (!(await confirmPeople(target, `unban ${people.length} person(s)`, people, Boolean(options.yes), notes))) return 0
+          const result = await unbanMembers(tg, target.id, userIds, { yes: options.yes })
+          return reportBatch('unbanned', result, userIds.length, target.id, Boolean(options.json))
+        })
+        if (exit !== 0) process.exit(exit)
+      })
+    })
+
+  group
+    .command('restrict <peer> <user>')
+    .description('Take abilities away from one member of a supergroup (numeric user id); to lift them use unban')
+    .option('--deny <rights>', 'Comma-separated abilities to take away, e.g. send-messages,send-media,send-polls')
+    .option('--until <date>', 'ISO date when the restriction lifts (30 seconds to 366 days ahead); omit for forever')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, user: string, options: GroupFlags & { deny?: string; until?: string }) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        const userId = parsePersonId(user)
+        const denied = parseRestrictionNames(options.deny ?? '')
+        const until = parseUntil(options.until)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          const person = describePeer(await resolvePeerRef(tg, String(userId)))
+          const notes = [`deny: ${denied.join(', ')}`, untilNote(until)]
+          if (!(await confirmPeople(target, 'RESTRICT this person', [person], Boolean(options.yes), notes))) return
+          report(
+            await restrictMember(tg, target.id, userId, denied, { until, yes: options.yes }),
+            `restricted ${userId} in ${target.id}: ${denied.join(', ')}`,
+            Boolean(options.json)
+          )
+        })
+      })
+    })
+
+  group
+    .command('promote <peer> <user>')
+    .description('Make one person an admin with exactly the rights named (numeric user id); there is no "all"')
+    .option('--rights <rights>', 'Comma-separated admin rights, e.g. delete-messages,ban-users,pin-messages')
+    .option('--rank <text>', 'Custom admin title, 1-16 characters')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, user: string, options: GroupFlags & { rights?: string; rank?: string }) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        const userId = parsePersonId(user)
+        const rights = parseAdminRightNames(options.rights ?? '')
+        const rank = parseRank(options.rank)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          const person = describePeer(await resolvePeerRef(tg, String(userId)))
+          const notes = [
+            `rights: ${rights.join(', ')}`,
+            ...(rank === undefined ? [] : [`title: ${rank}`]),
+            'this REPLACES any rights the person already has',
+            ...(rights.includes('add-admins') ? ['WARNING: add-admins lets this person appoint further admins'] : [])
+          ]
+          if (!(await confirmPeople(target, 'make this person an ADMIN', [person], Boolean(options.yes), notes))) return
+          report(
+            await promoteAdmin(tg, target.id, userId, rights, { rank, yes: options.yes }),
+            `promoted ${userId} in ${target.id}: ${rights.join(', ')}`,
+            Boolean(options.json)
+          )
+        })
+      })
+    })
+
+  group
+    .command('demote <peer> <user>')
+    .description('Take every admin right away from one person (numeric user id); they stay a member')
+    .option('--yes', 'Skip the confirmation; required for unattended runs')
+    .option('--json', 'Machine-readable output')
+    .action(async (peer: string, user: string, options: GroupFlags) => {
+      await runCommand(async () => {
+        parsePeerRef(peer)
+        assertConfirmed(options)
+        const userId = parsePersonId(user)
+        await withAuthenticatedClient(async (tg) => {
+          const target = await resolvePeerRef(tg, peer)
+          const person = describePeer(await resolvePeerRef(tg, String(userId)))
+          const notes = ['removes every admin right; they stay in the chat as a member']
+          if (!(await confirmPeople(target, 'take ADMIN rights away from this person', [person], Boolean(options.yes), notes))) return
+          report(
+            await demoteAdmin(tg, target.id, userId, { yes: options.yes }),
+            `demoted ${userId} in ${target.id}`,
             Boolean(options.json)
           )
         })
