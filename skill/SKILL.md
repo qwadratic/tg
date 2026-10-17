@@ -184,14 +184,22 @@ tg group join-to-send <peer> on
 tg group add-members <peer> <id> <id>     # numeric ids, max 20; per-user result
 tg group kick-member <peer> <id>
 tg group delete <peer>                    # only a chat you created; irreversible
+tg group members <peer> --type admins     # read-only: id, name, @handle, role, rights
+tg group ban <peer> <id> [<id>...] [--until 2026-12-31]   # forever without --until
+tg group unban <peer> <id> [<id>...]      # lifts a ban or restrictions; does not re-add
+tg group restrict <peer> <id> --deny send-messages,send-media [--until <date>]
+tg group promote <peer> <id> --rights delete-messages,pin-messages [--rank "Mod"]
+tg group demote <peer> <id>
 ```
 
 To post into a forum topic, add `--topic <topicId>` to `tg send text` or `tg send media`.
 
 Two are not reversible: `tg group invite-export` breaks every copy of the old
 primary link, and `tg group remove-username` returns the handle to the global
-pool; `delete` cannot be undone either. Ban, restrict and admin rights are NOT
-implemented - do not try to reach them another way.
+pool; `delete` cannot be undone either, and a ban is not undone by an unban in
+the eyes of the people who watched it. Legacy-group deletion, chat migration,
+auto-delete and ownership transfer are NOT implemented - do not try to reach
+them another way.
 
 `add-members --json` returns `{ok, added, failed:[{user, reason, message}]}` and
 exits 0 on partial failure: read `failed`. Reasons: `privacy`, `not_mutual`,
@@ -200,6 +208,20 @@ are not retryable: create a link with `tg group invite-new <peer>` and give it t
 the operator to share. Never loop over many users: invite one by one at human
 pace, prefer invite links, and on `flood` stop. Exit codes for Telegram refusals:
 3 `CHAT_ADMIN_REQUIRED` (ask a human), 2 not a forum or closed topic, 6 flood.
+
+Moderation and admin rights (`ban`, `unban`, `restrict`, `promote`, `demote`) act
+on a person. Give people as **positive numeric ids** from `tg peers find <name>
+--id-only`, never a handle and never a chat id, and only in a supergroup or
+channel (a legacy group is refused: use `kick-member`). One request per person,
+at most 20 per call, and a flood or a missing admin right stops the batch: do not
+loop or retry. `ban --json` and `unban --json` return `{ok, banned|unbanned,
+failed:[{user, reason, message, exit}]}` and **exit non-zero if anyone was not
+done**, with the code of the first refusal (3: a human must grant a right or
+decide; 2: that person or chat cannot be acted on; 6: flood). `--until` must be
+30 seconds to 366 days ahead or omitted (omitted means forever). `promote` names
+each right in `--rights`; there is no `all` and no ownership transfer, and it
+replaces the rights the person had. A refusal for any of these is the feature: do
+not add `--yes` to get past it, ask the operator.
 
 ## Hard rules — these are enforced, not advisory
 
