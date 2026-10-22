@@ -143,6 +143,8 @@ hand-edited, per-machine file, never part of a workspace, never committed.
 | `scheduled list <peer> [ids...]` | messages waiting to be sent in a chat, soonest first |
 | `reactions show <peer> <id> [--users] [--limit n]` | the reactions on a message: counts, and with `--users` who |
 | `account sessions` / `account privacy [key]` / `account notify [peer]` | the account's own sessions, privacy rules and notification settings |
+| `story <link>` / `story <peer> <id> [--to dir] [--no-media] [--json]` | one story: caption with its links, the media (saved to a file), the areas laid over it, repost source, privacy flags. Never marks it viewed |
+| `story list <peer> [--download] [--to dir] [--json]` | the active stories of a person or channel |
 
 `dump` appends an engagement suffix when Telegram populates one — views,
 forwards, the three loudest reactions, the reply/comment count, and `edited`:
@@ -193,7 +195,7 @@ read or texted.
 
 ### Reading Telegram live
 
-The verbs from `chat info` to `account notify` above only read, and they share the
+The verbs from `chat info` to `story list` above only read, and they share the
 rules below. `AGENTS.md` and `skill/SKILL.md` have the version for agents.
 
 - **They cannot write.** None of them is behind the send gate, none can import the
@@ -220,6 +222,20 @@ rules below. `AGENTS.md` and `skill/SKILL.md` have the version for agents.
   uses only Telegram's free daily allowance of public-post searches; when it is used
   up the answer is exit `3` and nothing is ever paid in Stars. Nothing marks a
   message read, a reaction read or a story viewed.
+- **Stories.** `tg story https://t.me/<name>/s/<id>` (or `tg story <peer> <id>`) reads one
+  story, `tg story list <peer>` the ones that are up now. **Nothing marks a story viewed:**
+  opening a story in the app tells its owner who looked, and nothing here sends that. A story
+  is fetched with `stories.getStoriesByID` or `stories.getPeerStories`, plain lookups, and
+  `readStories` and `incrementStoriesViews` are not called anywhere (a test hands the reader a
+  client that fails the moment anything but a lookup is touched, eval-205). The media is saved
+  the way `media pull` saves it, into `media/` (or `--to <dir>`), as `story-<owner>-<id>.jpg`
+  or `.mp4`, and the path is printed; `--no-media` skips the download. `--json` carries the
+  whole story: caption and its entities, links, mentions, areas (link, location, venue,
+  channel post, suggested reaction, weather), repost header, `privacy` (`public`, `contacts`,
+  `close_friends` or `selected_contacts`, plus pinned, edited, content-protected) and view,
+  forward and reaction counts when Telegram sends them, never who. A story that is deleted or
+  expired (Telegram keeps one for 24 hours unless it is pinned to the profile) exits `2`, as
+  does one this account cannot see; a person with no active stories prints that and exits `0`.
 - **Two searches.** `msg search` asks Telegram, so it costs requests and finds what
   was never archived. The offline search over the archive (TASK-26) keeps the name
   `tg search`; they are different verbs because one needs a session and the other

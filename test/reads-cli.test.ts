@@ -126,7 +126,9 @@ const READ_VERBS: [string, string][] = [
   ['user.ts', 'info'], ['contacts.ts', 'list'], ['dialogs.ts', 'show'], ['draft.ts', 'list'],
   ['scheduled.ts', 'list'], ['reactions.ts', 'show'],
   ['account.ts', 'sessions'], ['account.ts', 'privacy'], ['account.ts', 'notify'],
-  ['group.ts', 'member']
+  ['group.ts', 'member'],
+  // Stories (0.9.0).
+  ['story.ts', 'story'], ['story.ts', 'list']
 ]
 
 /** The source of one `.command('<name> ...')` up to its `.action(`. */
@@ -150,7 +152,7 @@ test('eval-199 every read verb takes --json, lists take --limit, and none of the
   assert.match(read('src', 'cli', 'commands', 'dump.ts'), /\.option\('--limit /)
 
   // Read verbs have no gate: no --yes, no confirmation, no send log. They cannot even name them.
-  for (const file of ['chat.ts', 'msg.ts', 'user.ts', 'contacts.ts', 'dialogs.ts', 'draft.ts', 'scheduled.ts', 'reactions.ts', 'account.ts']) {
+  for (const file of ['chat.ts', 'msg.ts', 'user.ts', 'contacts.ts', 'dialogs.ts', 'draft.ts', 'scheduled.ts', 'reactions.ts', 'account.ts', 'story.ts']) {
     const source = read('src', 'cli', 'commands', file)
     assert.doesNotMatch(source, /--yes|assertConfirmed|guardedSend|confirmChat|canPrompt|sent\.jsonl/, `${file} is a read verb and must have no gate`)
   }
@@ -159,7 +161,7 @@ test('eval-199 every read verb takes --json, lists take --limit, and none of the
   const index = read('src', 'index.ts')
   const writeStart = index.indexOf('Write verbs last')
   assert.ok(writeStart > 0)
-  for (const register of ['Chat', 'Msg', 'User', 'Contacts', 'Dialogs', 'Draft', 'Scheduled', 'Reactions', 'Account']) {
+  for (const register of ['Chat', 'Msg', 'User', 'Contacts', 'Dialogs', 'Draft', 'Scheduled', 'Reactions', 'Account', 'Story']) {
     const at = index.indexOf(`register${register}Command(program)`)
     assert.ok(at > 0 && at < writeStart, `register${register}Command must be called above the write verbs`)
   }
@@ -170,7 +172,9 @@ test('eval-200 the README and the skill document every read verb of 0.8', () => 
   const mentions = [
     'chat info', 'chat log', 'group member', 'msg get', 'msg link', 'msg thread', 'msg search',
     'user info', 'contacts list', 'dialogs show', 'draft list', 'scheduled list', 'reactions show',
-    'account sessions', 'account privacy', 'account notify', '--topic', '--thread'
+    'account sessions', 'account privacy', 'account notify', '--topic', '--thread',
+    // 0.9.0: stories.
+    'tg story', 'story list', '--no-media'
   ]
 
   for (const [name, text] of Object.entries(docs)) {
@@ -179,7 +183,7 @@ test('eval-200 the README and the skill document every read verb of 0.8', () => 
 
   // The place a new module lives is in the layout table an agent reads first.
   const agents = read('AGENTS.md')
-  for (const path of ['src/chats/', 'src/dialogs/', 'src/users/', 'src/account/', 'src/reads/errors.ts', 'src/messages/read.ts', 'src/messages/search.ts']) {
+  for (const path of ['src/chats/', 'src/dialogs/', 'src/users/', 'src/account/', 'src/stories/', 'src/reads/errors.ts', 'src/messages/read.ts', 'src/messages/search.ts']) {
     assert.ok(agents.includes(path), `AGENTS.md's layout table does not list ${path}`)
   }
 

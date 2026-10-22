@@ -10,6 +10,7 @@ triggers:
   - what did we discuss with
   - send a telegram message
   - pull a file or photo from telegram
+  - read a telegram story from a t.me/<name>/s/<id> link
   - ingest telegram into gbrain
 allowed-tools:
   - Bash
@@ -127,6 +128,16 @@ tg msg search "invoice" --global --filter document
 tg msg search mtcute --hashtag
 tg msg search "release notes" --posts    # public channel posts
 ```
+
+**"Read this story."** All read-only, and none of it marks a story viewed.
+```sh
+tg story 'https://t.me/cheshire304/s/885'   # caption, links, areas, privacy flags, and the media saved under ./media
+tg story @cheshire304 885 --no-media        # the same by peer and id, without downloading the photo or video
+tg story list @cheshire304                  # the stories that are up now (--download saves their media too)
+```
+Stories expire after 24 hours unless the owner pinned them, so read one soon after
+you get the link. A story that is gone exits `2`; read the file path from the
+output (or `--json`) to look at the media.
 
 **"Where do my chats stand, and what is waiting?"** All read-only.
 ```sh
@@ -294,7 +305,7 @@ do. `tg send log` shows today's count.
 ## The read verbs have rules of their own
 
 `chat`, `msg`, `user`, `contacts`, `dialogs`, `draft`, `scheduled`, `reactions`,
-`account` and `group member` only read. They have no `--yes` and no confirmation,
+`account`, `story` and `group member` only read. They have no `--yes` and no confirmation,
 and they cannot send: a test walks the import graph and fails if one could. They
 all take `--json` (stdout carries only the payload), and what can be long takes
 `--limit`.
@@ -316,6 +327,14 @@ all take `--json` (stdout carries only the payload), and what can be long takes
   Telegram wants; spending them is the operator's decision, in the Telegram app.
 - **`msg search` is Telegram's own search, live.** It is not the archive search,
   which reads Markdown files and needs no session (TASK-26, not built yet).
+- **A story is never marked viewed.** Opening one in the app tells its owner who
+  looked, and `tg story` does not: it fetches by id or lists, both plain lookups,
+  and never calls `readStories` or `incrementStoriesViews` (a test fails if it
+  could). Do not look for another command that opens a story, reacts to one or
+  lists who viewed it. A story that was deleted or has expired, and one this
+  account cannot see, exit `2`; a person with no active stories prints that and
+  exits `0`. The media is saved under `media/` (or `--to <dir>`) as
+  `story-<owner>-<id>.jpg` or `.mp4`, and the saved path is in the output.
 - **Names.** A chat or a person can be an id, `@username`, a `t.me` link or `me`,
   and the resolved identity is printed to stderr first: read it back to the
   operator when you used a handle. `msg link` refuses an invite link by name.

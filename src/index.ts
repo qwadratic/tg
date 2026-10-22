@@ -23,6 +23,7 @@ import { registerDialogsCommand } from './cli/commands/dialogs.js'
 import { registerDraftCommand } from './cli/commands/draft.js'
 import { registerScheduledCommand } from './cli/commands/scheduled.js'
 import { registerReactionsCommand } from './cli/commands/reactions.js'
+import { registerStoryCommand } from './cli/commands/story.js'
 import { registerAccountCommand } from './cli/commands/account.js'
 import { registerSendCommand } from './cli/commands/send.js'
 import { registerGroupCommand } from './cli/commands/group.js'
@@ -62,6 +63,10 @@ registerDraftCommand(program)
 registerScheduledCommand(program)
 registerReactionsCommand(program)
 registerAccountCommand(program)
+
+// Stories (0.9.0): read one by link or by id, or list a peer's. Reads only, and
+// nothing in there can mark a story viewed (eval-205).
+registerStoryCommand(program)
 
 // Archiving: `sync chats`, `sync recent`, `sync historical`.
 registerSyncCommand(program)

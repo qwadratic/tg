@@ -67,6 +67,9 @@ export function friendlyReadError(error: unknown): unknown {
       case 'MESSAGE_ID_INVALID':
       case 'MESSAGE_IDS_EMPTY':
         return new OperatorError(`Telegram does not have that message id (${error.text}).`, EXIT.usage)
+      case 'STORY_ID_INVALID':
+      case 'STORY_ID_EMPTY':
+        return new OperatorError(`Telegram does not have that story id (${error.text}).`, EXIT.usage)
       case 'TOPIC_ID_INVALID':
         return new OperatorError(
           'That is not a topic or thread of this chat. A forum topic is named by its first message id: tg group topic-list <chat>',
