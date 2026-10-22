@@ -1,0 +1,19 @@
+story 885 of Cheshire Cat (@cheshire304) [id -1001234567890]
+posted 2026-10-22T08:15, expires 2026-10-23T08:15 (active)
+link: https://t.me/cheshire304/s/885
+media: photo 1080x1920 (207 KB)
+file: /data/media/story-cheshire304-885.jpg
+privacy: public, pinned, edited, content-protected
+reposted from: Wien Notes [id -1000000001234], story 12 (modified)
+caption:
+    @alice see https://example.com/a and the docs, ask Bob about #vienna
+links: https://example.com/a https://example.com/docs https://example.com/promo
+mentions: @alice Bob [id 77]
+areas:
+  link https://example.com/promo
+  location 48.2082, 16.3738 (Vienna, AT)
+  venue Cafe Central, Herrengasse 14 (48.2082, 16.3738)
+  channel post Wien Notes (@wiennotes) #55 https://t.me/wiennotes/55
+  suggested reaction ❤
+  weather ☀ 21°C
+counts: 1234 views, 3 forwards, 40 reactions

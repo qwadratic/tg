@@ -288,6 +288,8 @@ const COMMAND_CLASS: Record<string, 'write' | 'legacy-write' | 'unattended' | 'r
   'scheduled.ts': 'read',
   'reactions.ts': 'read',
   'account.ts': 'read',
+  // Stories (0.9.0): reads only, and nothing here may mark one viewed (eval-205).
+  'story.ts': 'read',
   'auth.ts': 'plumbing',
   'session.ts': 'plumbing',
   'init.ts': 'plumbing',

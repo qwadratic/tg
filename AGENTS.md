@@ -38,7 +38,8 @@ stream and a bare number:
 Zero results is `usage` (2), not `not_configured` (4): a needle that matched
 nothing is a bad search term, not a broken workspace. That is a lookup or a
 search: `msg get` for ids that are not there, `msg search` with no hits, `group
-member` for someone who is not in the chat. A listing that is legitimately empty
+member` for someone who is not in the chat, `story` for a story that was deleted
+or has expired. A listing that is legitimately empty
 (`draft list`, `scheduled list`, `contacts list`, `chat log` with no events)
 prints that it is empty and exits 0, as every shipped listing does.
 
@@ -197,6 +198,7 @@ That is intended. Do not start an export beside it.
 | `src/account/index.ts` | READS of the account's own settings through raw TL: `account sessions`, `privacy`, `notify`. The only raw calls outside `src/send/`, and each method is on `READ_TL_METHODS` |
 | `src/reads/errors.ts` | `friendlyReadError`: Telegram's refusals of a read as exit codes (3 admin, 6 flood or network, 2 not found). The send module has its own table; a read cannot import it |
 | `src/groups/rights.ts` | the admin-right and restriction vocabularies, pure data shared by the read and write halves |
+| `src/stories/index.ts` | READS of stories: `story <link>`, `story <peer> <id>`, `story list <peer>`. Looks a story up by id or lists a peer's (`getStoriesById`, `getPeerStories`) and downloads its media. Never calls anything that marks a story viewed (`readStories`, `incrementStoriesViews`); eval-205 fails the suite if it could |
 | `src/media/index.ts` | media download |
 | `src/watch/index.ts` | polling for media not yet sent |
 | `src/send/gate.ts` | send caps, the daily moderation cap, confirmation rule, the TTY-only class (`TTY_ONLY_KINDS`), audit log. No RPCs |
