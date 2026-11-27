@@ -335,7 +335,7 @@ test('eval-96 the shipped agent skill stays in step with the CLI', () => {
     files: string[]
     name: string
   }
-  assert.ok(pkg.files.includes('skill'), 'skill/ must be in the published files')
+  assert.ok(!pkg.files.includes('skill'), 'skill/ is not published to npm')
   assert.ok(skill.includes(pkg.name), 'the skill must name the package it documents')
 
   // The real command tree, read from the files that build it. Top-level verbs

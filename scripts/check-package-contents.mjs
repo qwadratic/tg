@@ -14,7 +14,7 @@
 import { execFileSync } from 'node:child_process'
 
 const FORBIDDEN = [/^test\//, /^backlog\//, /^demo\//, /^\.planning\//, /^\.prompts\//, /^src\//, /^\.github\//, /^scripts\//]
-const REQUIRED = ['package.json', 'README.md', 'bin/tg.mjs', 'dist/index.js', 'skill/SKILL.md']
+const REQUIRED = ['package.json', 'README.md', 'bin/tg.mjs', 'dist/index.js']
 const MAX_BYTES = 400 * 1024
 
 const raw = execFileSync('npm', ['pack', '--dry-run', '--json'], { encoding: 'utf-8' })
