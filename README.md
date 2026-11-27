@@ -13,29 +13,14 @@ recording is safe to publish. Rebuild it with `demo/record.sh`.*
 
 ## If you are an AI agent, read this first
 
-`skill/SKILL.md` in this repo is written for you. It covers the setup workflow,
-the user stories this tool supports, and the rules that are **enforced rather
-than advisory** — the exit-code contract, why a refused send must not be routed
-around with `--yes`, and why only a human can create a session.
-
-```sh
-# installed globally
-cat "$(npm root -g)/@qwadratic/tg/skill/SKILL.md"
-
-# from a checkout
-cat skill/SKILL.md
-```
-
-Install it as a Claude Code skill so it loads automatically:
-
-```sh
-mkdir -p ~/.claude/skills/tg
-cp "$(npm root -g)/@qwadratic/tg/skill/SKILL.md" ~/.claude/skills/tg/
-```
+`AGENTS.md` ships in the package and is written for you. It carries the setup workflow
+and the rules that are **enforced rather than advisory**: the exit-code contract, why a
+refused send must not be routed around with `--yes`, and why only a human can create a
+session.
 
 The short version: run `tg doctor --json` before anything else, set
 `TG_NON_INTERACTIVE=1`, and act on the exit code rather than parsing prose.
-`AGENTS.md` carries the full contract and also ships in the package.
+`AGENTS.md` carries the full contract.
 
 ## Install
 
@@ -196,7 +181,7 @@ read or texted.
 ### Reading Telegram live
 
 The verbs from `chat info` to `story list` above only read, and they share the
-rules below. `AGENTS.md` and `skill/SKILL.md` have the version for agents.
+rules below. `AGENTS.md` has the version for agents.
 
 - **They cannot write.** None of them is behind the send gate, none can import the
   send module (a test walks the import graph), and the raw calls they make
@@ -722,7 +707,4 @@ show them to, and `--json` is what an agent pastes into a transcript.
 
 ### The agent skill
 
-`skill/SKILL.md` is the source of truth for agents and ships in the package. See
-[If you are an AI agent, read this first](#if-you-are-an-ai-agent-read-this-first)
-at the top. Keep it in step with `AGENTS.md`: the skill is the orientation, and
-AGENTS.md is the contract.
+The agent skill is not part of the npm package. `AGENTS.md` is the contract and ships in it.

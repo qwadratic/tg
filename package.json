@@ -1,6 +1,6 @@
 {
   "name": "@qwadratic/tg",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Read, archive and send your own Telegram from the command line or an agent",
   "keywords": [
     "telegram",
@@ -32,8 +32,7 @@
     "dist",
     "bin",
     "README.md",
-    "AGENTS.md",
-    "skill"
+    "AGENTS.md"
   ],
   "publishConfig": {
     "access": "public"
